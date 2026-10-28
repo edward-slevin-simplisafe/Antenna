@@ -32,6 +32,7 @@ Antenna/
 │   │   ├── touchstone.py     # .s1p  -> S11Data        (scikit-rf)
 │   │   └── pattern.py        # .csv  -> Pattern        (one file per frequency)
 │   ├── analysis.py           # pure numeric functions, no file I/O and no plotting
+│   ├── feedback.py           # timestamped progress messages for the scripts
 │   └── plotting.py           # matplotlib drawing, plus helpers that build whole figures
 ├── scripts/                  # thin command-line wrappers
 │   ├── plot_s11.py
@@ -48,7 +49,7 @@ Antenna/
 | **models** | `S11Data`, `Pattern`, and constants. | Constants include trace colors and labels, the gain limit, the principal planes, and the Wi-Fi marker frequencies. |
 | **analysis** | S11 in dB, VSWR, bandwidth below a threshold, pattern cuts, peak gain, smoothing. | Pure functions of numpy arrays, so they are easy to test and reuse. |
 | **plotting** | `plot_*` functions draw on an `Axes` you pass in; `make_*_figure` functions build a complete figure. | Because the plot functions take an `Axes`, they can be embedded in a GUI canvas unchanged. |
-| **scripts** | Parse arguments, load, call plotting, save or show. | Keep these thin. |
+| **scripts** | Parse arguments, load, call plotting, save or show, and print progress. | Keep these thin. |
 
 ## Data formats
 
@@ -93,15 +94,20 @@ Run the scripts from the repository root with the virtual environment active. Wi
 # S11: dB plot and Smith chart with the default Wi-Fi markers
 python scripts/plot_s11.py data/01.S1P
 
-# Radiation patterns: the three principal planes for every CSV in data/
-python scripts/plot_patterns.py data --plane XY XZ YZ --save-dir output
+# Radiation patterns: the three principal planes for every CSV in a sample's folder
+python scripts/plot_patterns.py data/01_pattern --plane XY XZ YZ --save-dir output
 
 # Same, smoothed with a 20 degree window
-python scripts/plot_patterns.py data --plane XY XZ YZ --smooth 20 --save-dir output
+python scripts/plot_patterns.py data/01_pattern --plane XY XZ YZ --smooth 20 --save-dir output
 ```
 
 Saved filenames look like `01_db.png`, `01_smith.png` and `2450MHz_XY_polar.png`
 (`..._smooth<N>` is appended when smoothing is on).
+
+The scripts print timestamped progress (loading libraries, reading each file, building each
+figure) and stop with a one-line `error:` message for problems such as a mistyped path or a
+folder with no CSVs directly inside it. Pattern folders are not searched recursively: point at the
+folder that holds the CSVs, for example `data/01_pattern`.
 
 ### `plot_s11.py --help`
 
@@ -148,17 +154,18 @@ Plot radiation-pattern cuts, one figure per frequency, polarizations overlaid.
 Theta is measured from +Z and phi from +X toward +Y, so the principal planes are
     XY = theta 90 cut,   XZ = phi 0 cut,   YZ = phi 90 cut.
 
-    # the three principal planes, polar + rectangular, for every CSV in data/
-    python scripts/plot_patterns.py data --plane XY XZ YZ
+    # the three principal planes, polar + rectangular, for every CSV in a folder
+    python scripts/plot_patterns.py data/01_pattern --plane XY XZ YZ
 
     # one plane, one frequency, polar only, saved to disk
-    python scripts/plot_patterns.py "data/01-2450*.csv" --plane XY --kind polar --save-dir output
+    python scripts/plot_patterns.py "data/01_pattern/01-2450*.csv" --plane XY --kind polar --save-dir output
 
     # arbitrary cuts: phi = 45 and phi = 135 (sweeping theta)
-    python scripts/plot_patterns.py data --cut phi --angles 45 135
+    python scripts/plot_patterns.py data/01_pattern --cut phi --angles 45 135
 
-Files may be given as paths, directories (all *.csv) or glob patterns. The frequency is
-read from the filename (e.g. 01-2400.000000MHz.csv). --plane and --cut/--angles can be combined.
+Files may be given as paths, directories (all *.csv directly inside) or glob patterns. The
+frequency is read from the filename (e.g. 01-2400.000000MHz.csv). --plane and --cut/--angles
+can be combined.
 
 positional arguments:
   inputs                pattern CSV files, directories or globs
@@ -182,6 +189,22 @@ options:
   --no-gain-limit       omit the gain limit line
   --save-dir SAVE_DIR   save PNGs here instead of showing
 ```
+
+## Performance
+
+Plotting itself takes a second or two per figure; most of the wait is Python loading numpy,
+scipy and matplotlib at startup. If the virtual environment lives in a Google Drive (or other
+synced or network) folder, those loads can take 30 seconds or more, versus a fraction of a second
+from a local disk. The scripts print how long loading took and suggest this fix when it is slow:
+create the environment in a local folder instead, then install the project into it.
+
+```powershell
+python -m venv C:\venvs\antenna
+C:\venvs\antenna\Scripts\Activate.ps1
+pip install -e ".[dev]"      # run from the repository root
+```
+
+`--help` and path errors are reported before any heavy library is loaded, so they return immediately.
 
 ## Tests
 

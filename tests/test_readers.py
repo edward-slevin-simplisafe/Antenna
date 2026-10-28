@@ -248,3 +248,59 @@ def test_s11_marker_frequencies_are_labeled(tmp_path):
     for freq in ("2400 MHz", "2442 MHz", "2483 MHz"):
         assert any(text.startswith(freq) and text.endswith(" dB") for text in labels)
     assert WIFI_24_MARKS_MHZ == (2400.0, 2442.0, 2483.0)
+
+
+# ---- user feedback / error messages / startup ------------------------------------
+
+def test_say_format(capsys):
+    import re
+    from antenna.feedback import say
+    say("hello")
+    assert re.fullmatch(r"\[\s*\d+\.\ds\] hello\n", capsys.readouterr().out)
+
+
+def test_slow_load_tip(capsys):
+    from antenna.feedback import SLOW_LOAD_SECONDS, tip_if_slow
+    tip_if_slow(SLOW_LOAD_SECONDS - 1)
+    assert capsys.readouterr().out == ""
+    tip_if_slow(SLOW_LOAD_SECONDS + 1)
+    assert "Google Drive" in capsys.readouterr().out
+
+
+def test_folder_without_csvs_points_to_subfolders(tmp_path):
+    from antenna.readers.pattern import find_pattern_files
+    sub = tmp_path / "01_pattern"
+    sub.mkdir()
+    (sub / "01-2400.000000MHz.csv").write_text(PATTERN)
+    with pytest.raises(FileNotFoundError, match="01_pattern"):
+        find_pattern_files([tmp_path])
+    assert len(find_pattern_files([sub])) == 1
+
+
+def test_missing_inputs_raise_clear_errors(tmp_path):
+    from antenna.readers.pattern import find_pattern_files
+    with pytest.raises(FileNotFoundError, match="no file or folder matches"):
+        find_pattern_files([tmp_path / "nope*.csv"])
+    with pytest.raises(FileNotFoundError, match="file not found"):
+        read_s1p(tmp_path / "missing.s1p")
+
+
+def test_load_patterns_reports_progress(tmp_path):
+    from antenna.readers import load_patterns
+    for mhz in (2450, 2400):
+        (tmp_path / f"01-{mhz}.000000MHz.csv").write_text(PATTERN)
+    calls = []
+    patterns = load_patterns([tmp_path], on_file=lambda i, n, p: calls.append((i, n, p.name)))
+    assert calls == [(1, 2, "01-2400.000000MHz.csv"), (2, 2, "01-2450.000000MHz.csv")]
+    assert [p.freq_hz for p in patterns] == [2.4e9, 2.45e9]  # still sorted by frequency
+
+
+def test_path_checks_do_not_import_heavy_libraries():
+    """Scripts validate paths before the slow library load, so these imports must stay light."""
+    import subprocess
+    import sys
+    code = ("import sys; import antenna.models, antenna.feedback, antenna.readers; "
+            "from antenna.readers.pattern import find_pattern_files, freq_from_filename; "
+            "print([m for m in ('numpy', 'scipy', 'matplotlib', 'skrf') if m in sys.modules])")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert out.stdout.strip() == "[]", out.stderr or out.stdout

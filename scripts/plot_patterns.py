@@ -3,27 +3,30 @@
 Theta is measured from +Z and phi from +X toward +Y, so the principal planes are
     XY = theta 90 cut,   XZ = phi 0 cut,   YZ = phi 90 cut.
 
-    # the three principal planes, polar + rectangular, for every CSV in data/
-    python scripts/plot_patterns.py data --plane XY XZ YZ
+    # the three principal planes, polar + rectangular, for every CSV in a folder
+    python scripts/plot_patterns.py data/01_pattern --plane XY XZ YZ
 
     # one plane, one frequency, polar only, saved to disk
-    python scripts/plot_patterns.py "data/01-2450*.csv" --plane XY --kind polar --save-dir output
+    python scripts/plot_patterns.py "data/01_pattern/01-2450*.csv" --plane XY --kind polar --save-dir output
 
     # arbitrary cuts: phi = 45 and phi = 135 (sweeping theta)
-    python scripts/plot_patterns.py data --cut phi --angles 45 135
+    python scripts/plot_patterns.py data/01_pattern --cut phi --angles 45 135
 
-Files may be given as paths, directories (all *.csv) or glob patterns. The frequency is
-read from the filename (e.g. 01-2400.000000MHz.csv). --plane and --cut/--angles can be combined.
+Files may be given as paths, directories (all *.csv directly inside) or glob patterns. The
+frequency is read from the filename (e.g. 01-2400.000000MHz.csv). --plane and --cut/--angles
+can be combined.
 """
 
 import argparse
+import sys
+import time
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-
+from antenna.feedback import elapsed, say, tip_if_slow
 from antenna.models import GAIN_LIMIT_DB, PLANES, plane_name
-from antenna.plotting import make_cut_figure
-from antenna.readers import load_patterns
+from antenna.readers.pattern import find_pattern_files, freq_from_filename, load_patterns
+
+MANY_WINDOWS = 12  # warn before opening more interactive windows than this
 
 
 def main():
@@ -59,26 +62,63 @@ def main():
         ap.error("choose what to plot: --plane XY XZ YZ and/or --cut with --angles")
     cuts = list(dict.fromkeys(cuts))  # e.g. --plane XZ plus --cut phi --angles 0 is one plot
 
-    patterns = load_patterns(args.inputs)
-    print(f"loaded {len(patterns)} pattern file(s): "
-          + ", ".join(f"{p.freq_hz / 1e6:g} MHz" for p in patterns))
+    try:  # fail fast on a typo, before the slow library load
+        files = find_pattern_files(args.inputs)
+    except FileNotFoundError as err:
+        sys.exit(f"error: {err}")
+    say(f"Found {len(files)} pattern file(s)")
 
+    say("Loading libraries (numpy, scipy, matplotlib)...")
+    t0 = time.perf_counter()
+    import matplotlib.pyplot as plt
+
+    from antenna.plotting import make_cut_figure
+
+    load_s = time.perf_counter() - t0
+    say(f"Libraries loaded in {load_s:.1f} s")
+    tip_if_slow(load_s)
+
+    def reading(i, total, path):
+        freq = freq_from_filename(path)
+        say(f"Reading {path.name} ({i}/{total})" + (f" - {freq / 1e6:g} MHz" if freq else ""))
+
+    try:
+        patterns = load_patterns(files, on_file=reading)
+    except (FileNotFoundError, ValueError, KeyError) as err:
+        sys.exit(f"error: {err}")
+    say(f"Loaded {len(patterns)} frequency point(s): "
+        f"{patterns[0].freq_hz / 1e6:g} to {patterns[-1].freq_hz / 1e6:g} MHz")
+
+    total = len(patterns) * len(cuts) * len(args.kind)
+    say(f"Making {total} figure(s)" + (f", saving to {args.save_dir}" if args.save_dir else ""))
+    if not args.save_dir and total > MANY_WINDOWS:
+        say(f"Note: that opens {total} windows at once; add --save-dir <folder> to save PNGs instead.")
+
+    count = 0
     for pattern in patterns:
         for cut, angle in cuts:
+            where = plane_name(cut, angle) or f"{cut}{angle:g}"
             for kind in args.kind:
-                fig = make_cut_figure(pattern, cut, angle, kind, args.pols, args.dyn_range,
-                                      args.smooth, gain_limit)
+                count += 1
+                say(f"({count}/{total}) {pattern.freq_hz / 1e6:g} MHz {where} {kind}")
+                try:
+                    fig = make_cut_figure(pattern, cut, angle, kind, args.pols, args.dyn_range,
+                                          args.smooth, gain_limit)
+                except (KeyError, ValueError) as err:
+                    sys.exit(f"error: {err}")
                 if args.save_dir:
                     args.save_dir.mkdir(parents=True, exist_ok=True)
-                    where = plane_name(cut, angle) or f"{cut}{angle:g}"
                     tag = f"_smooth{args.smooth:g}" if args.smooth > 0 else ""
                     name = f"{pattern.freq_hz / 1e6:g}MHz_{where}_{kind}{tag}.png"
                     fig.savefig(args.save_dir / name, dpi=150)
                     plt.close(fig)
-                    print(f"saved {args.save_dir / name}")
 
-    if not args.save_dir:
+    if args.save_dir:
+        say(f"Done: {count} file(s) saved to {args.save_dir} in {elapsed():.1f} s")
+    else:
+        say(f"Showing {count} figure window(s) - close them to exit.")
         plt.show()
+        say("Done")
 
 
 if __name__ == "__main__":

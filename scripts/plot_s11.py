@@ -10,13 +10,13 @@ By default the plots are marked at the 2.4 GHz Wi-Fi band edges and center
 """
 
 import argparse
+import sys
+import time
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-
+from antenna.feedback import elapsed, say, tip_if_slow
 from antenna.models import WIFI_24_MARKS_MHZ
-from antenna.plotting import make_s11_figure, make_smith_figure
-from antenna.readers import read_s1p
+from antenna.readers import check_s1p_path
 
 
 def main():
@@ -32,15 +32,47 @@ def main():
     ap.add_argument("--no-marks", action="store_true", help="draw no frequency markers")
     ap.add_argument("--save-dir", type=Path, help="save PNGs here instead of showing")
     args = ap.parse_args()
-
     marks = [] if args.no_marks else (args.mark or list(WIFI_24_MARKS_MHZ))
-    series = [read_s1p(f) for f in args.files]
+
+    for path in args.files:  # fail fast on a typo, before the slow library load
+        try:
+            check_s1p_path(path)
+        except (FileNotFoundError, ValueError) as err:
+            sys.exit(f"error: {err}")
+
+    say("Loading libraries (numpy, scipy, matplotlib, scikit-rf)...")
+    t0 = time.perf_counter()
+    import matplotlib.pyplot as plt
+
+    from antenna.plotting import make_s11_figure, make_smith_figure
+    from antenna.readers import read_s1p
+
+    import skrf  # noqa: F401  (imported here so its load time is reported with the rest)
+
+    load_s = time.perf_counter() - t0
+    say(f"Libraries loaded in {load_s:.1f} s")
+    tip_if_slow(load_s)
+
+    series = []
+    for k, path in enumerate(args.files, 1):
+        say(f"Reading {path} ({k}/{len(args.files)})...")
+        try:
+            data = read_s1p(path)
+        except (FileNotFoundError, ValueError) as err:
+            sys.exit(f"error: {err}")
+        series.append(data)
+        say(f"  {len(data.freq_hz)} points, "
+            f"{data.freq_hz[0] / 1e6:g} to {data.freq_hz[-1] / 1e6:g} MHz")
     stem = series[0].name if len(series) == 1 else "s11"
 
+    if marks:
+        say("Marking " + ", ".join(f"{m:g}" for m in sorted(marks)) + " MHz")
     figures = {}
     if "db" in args.plots:
+        say("Building dB plot...")
         figures["db"] = make_s11_figure(series, threshold_db=args.threshold, mark_mhz=marks)
     if "smith" in args.plots:
+        say("Building Smith chart...")
         figures["smith"] = make_smith_figure(series, threshold_db=args.threshold,
                                              mark_mhz=marks)
 
@@ -48,10 +80,13 @@ def main():
         args.save_dir.mkdir(parents=True, exist_ok=True)
         for kind, fig in figures.items():
             out = args.save_dir / f"{stem}_{kind}.png"
+            say(f"Saving {out}...")
             fig.savefig(out, dpi=150)
-            print(f"saved {out}")
+        say(f"Done: {len(figures)} file(s) saved to {args.save_dir} in {elapsed():.1f} s")
     else:
+        say(f"Showing {len(figures)} figure window(s) - close them to exit.")
         plt.show()
+        say("Done")
 
 
 if __name__ == "__main__":

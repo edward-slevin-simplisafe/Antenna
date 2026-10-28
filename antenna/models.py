@@ -1,8 +1,12 @@
 """Plain data containers shared by the readers, analysis and plotting code."""
 
-from dataclasses import dataclass, field
+from __future__ import annotations
 
-import numpy as np
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # type hints only; skipping the runtime import keeps script startup fast
+    import numpy as np
 
 # Suffix of the "Gain<X>" table name in the pattern CSVs -> legend label.
 # "T" is labeled H+V as in the test report (its peaks match the report's peak-gain table).

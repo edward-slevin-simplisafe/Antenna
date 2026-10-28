@@ -14,8 +14,6 @@ import glob
 import re
 from pathlib import Path
 
-import numpy as np
-
 from antenna.models import Pattern
 
 _FREQ_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(GHz|MHz|kHz|Hz)", re.IGNORECASE)
@@ -36,6 +34,8 @@ def _floats(cells) -> list[float]:
 
 
 def read_pattern(path, freq_hz: float | None = None) -> Pattern:
+    import numpy as np  # lazy so path checks (find_pattern_files) don't wait for numpy to load
+
     path = Path(path)
     if freq_hz is None:
         freq_hz = freq_from_filename(path)
@@ -106,14 +106,33 @@ def find_pattern_files(inputs) -> list[Path]:
     for item in inputs:
         p = Path(item)
         if p.is_dir():
-            found += sorted(p.glob("*.csv"))
+            csvs = sorted(p.glob("*.csv"))
+            if not csvs:
+                subs = sorted(d for d in p.iterdir() if d.is_dir() and any(d.glob("*.csv")))
+                hint = (" Subfolders that do contain CSVs: " + ", ".join(str(d) for d in subs)
+                        if subs else "")
+                raise FileNotFoundError(f"no .csv files directly inside '{p}'.{hint}")
+            found += csvs
+        elif p.is_file():
+            found.append(p)
         else:
             matches = glob.glob(str(item))
-            found += [Path(m) for m in sorted(matches)] if matches else [p]
+            if not matches:
+                raise FileNotFoundError(f"no file or folder matches '{item}'")
+            found += [Path(m) for m in sorted(matches)]
     return list(dict.fromkeys(found))
 
 
-def load_patterns(inputs) -> list[Pattern]:
-    """Read every pattern file and return them sorted by frequency."""
-    patterns = [read_pattern(p) for p in find_pattern_files(inputs)]
+def load_patterns(inputs, on_file=None) -> list[Pattern]:
+    """Read every pattern file and return them sorted by frequency.
+
+    on_file(index, total, path), if given, is called just before each file is read (1-based),
+    so callers can report progress.
+    """
+    paths = find_pattern_files(inputs)
+    patterns = []
+    for i, path in enumerate(paths, 1):
+        if on_file:
+            on_file(i, len(paths), path)
+        patterns.append(read_pattern(path))
     return sorted(patterns, key=lambda pat: pat.freq_hz)

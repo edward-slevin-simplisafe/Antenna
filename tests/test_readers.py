@@ -173,3 +173,78 @@ def test_effective_window():
     assert analysis.effective_window_deg(5, 15) == 15
     assert analysis.effective_window_deg(5, 0) == 0
     assert analysis.effective_window_deg(5, 4) == 0  # narrower than 2 samples: no smoothing
+
+
+# ---- planes / orientation / colors --------------------------------------------
+
+def test_plane_names():
+    from antenna.models import PLANES, plane_name
+    assert plane_name("theta", 90) == "XY"
+    assert plane_name("phi", 0) == "XZ"
+    assert plane_name("phi", 90.0) == "YZ"
+    assert plane_name("phi", 45) is None
+    assert plane_name("theta", 0) is None
+    assert set(PLANES) == {"XY", "XZ", "YZ"}
+
+
+def test_cut_orientation_and_colors(pattern):
+    import matplotlib
+    matplotlib.use("Agg")
+    import numpy as np
+    from antenna.plotting import make_cut_figure
+
+    xy = make_cut_figure(pattern, "theta", 90, "polar").axes[0]
+    assert xy.get_theta_direction() == 1  # counterclockwise
+    assert xy.get_theta_offset() == pytest.approx(0.0)  # 0 deg at +X (right)
+    assert "XY plane" in xy.get_title()
+
+    xz = make_cut_figure(pattern, "phi", 0, "polar").axes[0]
+    assert xz.get_theta_direction() == -1  # clockwise from the top
+    assert xz.get_theta_offset() == pytest.approx(np.pi / 2)
+    assert "XZ plane" in xz.get_title()
+
+    colors = {line.get_label(): line.get_color() for line in xz.get_lines() if line.get_label()
+              in ("H+V", "H")}
+    assert colors == {"H+V": "#002060", "H": "#92D050"}
+
+
+# ---- gain limit line / S11 markers ---------------------------------------------
+
+def test_gain_limit_line_on_rect_plot(pattern):
+    import matplotlib
+    matplotlib.use("Agg")
+    from antenna.plotting import make_cut_figure
+
+    def limit_lines(fig):
+        return [ln for ln in fig.axes[0].get_lines() if ln.get_label() == "4 dB limit"]
+
+    (line,) = limit_lines(make_cut_figure(pattern, "phi", 0, "rect"))  # on by default
+    assert list(line.get_ydata()) == [4, 4]
+    assert line.get_linestyle() == "--"
+    assert not limit_lines(make_cut_figure(pattern, "phi", 0, "rect", gain_limit_db=None))
+    assert not limit_lines(make_cut_figure(pattern, "phi", 0, "polar"))  # rect plots only
+
+
+def test_gain_limit_stays_inside_axes(pattern):
+    import matplotlib
+    matplotlib.use("Agg")
+    from antenna.plotting import make_cut_figure
+
+    ax = make_cut_figure(pattern, "phi", 0, "rect", gain_limit_db=12).axes[0]
+    assert ax.get_ylim()[1] >= 12
+
+
+def test_s11_marker_frequencies_are_labeled(tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    from antenna.models import WIFI_24_MARKS_MHZ
+    from antenna.plotting import make_s11_figure
+
+    f = tmp_path / "a.s1p"
+    f.write_text("# MHz S RI R 50\n" + "".join(f"{m} {0.1 * (m - 2000) / 1000:g} 0\n"
+                                               for m in range(2000, 3001, 50)))
+    ax = make_s11_figure([read_s1p(f)], mark_mhz=list(WIFI_24_MARKS_MHZ)).axes[0]
+    labels = [t.get_text() for t in ax.texts]
+    for freq in ("2400 MHz", "2442 MHz", "2483 MHz"):
+        assert any(text.startswith(freq) and text.endswith(" dB") for text in labels)
+    assert WIFI_24_MARKS_MHZ == (2400.0, 2442.0, 2483.0)

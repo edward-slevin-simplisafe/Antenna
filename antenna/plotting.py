@@ -7,7 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from antenna import analysis
-from antenna.models import DEFAULT_POLS, POL_LABELS, Pattern, S11Data
+from antenna.models import (DEFAULT_POLS, GAIN_LIMIT_DB, POL_COLORS, POL_LABELS, Pattern,
+                            S11Data, plane_name)
 
 
 # ---- S11 -------------------------------------------------------------------
@@ -22,11 +23,22 @@ def plot_s11(ax, series: list[S11Data], threshold_db: float | None = -10.0,
         if threshold_db is not None and shade_bands:
             for lo, hi in analysis.bands_below(f_mhz, y, threshold_db):
                 ax.axvspan(lo, hi, color=line.get_color(), alpha=0.08)
-        for fm in mark_mhz or []:
+        marks = sorted(mark_mhz or [])
+        for i, fm in enumerate(marks):
             val = float(np.interp(fm, f_mhz, y))
             ax.plot([fm], [val], "o", color=line.get_color())
-            ax.annotate(f"{val:.1f} dB", (fm, val), textcoords="offset points",
-                        xytext=(6, 6), fontsize=8)
+            # Stagger labels so neighbouring markers don't overlap: first up-left, last to the
+            # right, any in between below-left.
+            if i == len(marks) - 1 and i > 0:
+                offset, ha = (10, -4), "left"
+            elif i == 0:
+                offset, ha = (-10, 8), "right"
+            else:
+                offset, ha = (-10, -16), "right"
+            ax.annotate(f"{fm:g} MHz\n{val:.1f} dB", (fm, val), textcoords="offset points",
+                        xytext=offset, ha=ha, fontsize=8)
+    for fm in mark_mhz or []:
+        ax.axvline(fm, color="gray", ls=":", lw=0.8)
     if threshold_db is not None:
         ax.axhline(threshold_db, color="gray", ls="--", lw=0.8)
     ax.set_xlabel("Frequency (MHz)")
@@ -87,23 +99,39 @@ def _limits(gains: dict[str, np.ndarray], dynamic_range_db: float):
 
 
 def plot_cut_polar(ax, angle_deg: np.ndarray, gains: dict[str, np.ndarray],
-                   dynamic_range_db: float = 40.0):
-    """Polar overlay; 0 deg at the top, increasing clockwise. `ax` needs projection='polar'."""
+                   dynamic_range_db: float = 40.0, colors: dict[str, str] | None = None,
+                   top_down: bool = False):
+    """Polar overlay. `ax` needs projection='polar'.
+
+    Default: 0 deg at the top, increasing clockwise (theta sweeps of the XZ/YZ cuts).
+    top_down=True: 0 deg at the right, increasing counterclockwise, i.e. the view from +Z
+    for an azimuth (phi) sweep, so +X is right and +Y is up.
+    """
     rmin, rmax = _limits(gains, dynamic_range_db)
     for label, g in gains.items():
-        ax.plot(np.deg2rad(angle_deg), np.maximum(g, rmin), label=label)
-    ax.set_theta_zero_location("N")
-    ax.set_theta_direction(-1)
+        ax.plot(np.deg2rad(angle_deg), np.maximum(g, rmin), label=label,
+                color=(colors or {}).get(label), lw=1.8)
+    if top_down:
+        ax.set_theta_zero_location("E")
+        ax.set_theta_direction(1)
+    else:
+        ax.set_theta_zero_location("N")
+        ax.set_theta_direction(-1)
     ax.set_rlim(rmin, rmax)
     ax.set_rlabel_position(22.5)
     ax.grid(True, alpha=0.4)
 
 
 def plot_cut_rect(ax, angle_deg: np.ndarray, gains: dict[str, np.ndarray], xlabel: str,
-                  dynamic_range_db: float = 40.0):
+                  dynamic_range_db: float = 40.0, colors: dict[str, str] | None = None,
+                  limit_db: float | None = None):
+    """Rectangular overlay; limit_db draws a dashed requirement line (e.g. max gain)."""
     rmin, rmax = _limits(gains, dynamic_range_db)
     for label, g in gains.items():
-        ax.plot(angle_deg, g, label=label)
+        ax.plot(angle_deg, g, label=label, color=(colors or {}).get(label), lw=1.8)
+    if limit_db is not None:
+        ax.axhline(limit_db, color="black", ls="--", lw=1.2, label=f"{limit_db:g} dB limit")
+        rmax = max(rmax, limit_db + 1)  # keep the limit line inside the plot
     ax.set_xlim(angle_deg.min(), angle_deg.max())
     ax.set_ylim(rmin, rmax)
     ax.set_xticks(np.arange(math.ceil(angle_deg.min() / 30) * 30, angle_deg.max() + 1, 30))
@@ -114,16 +142,19 @@ def plot_cut_rect(ax, angle_deg: np.ndarray, gains: dict[str, np.ndarray], xlabe
 
 def make_cut_figure(pattern: Pattern, cut: str, value_deg: float, kind: str = "polar",
                     pols: list[str] | None = None, dynamic_range_db: float = 40.0,
-                    smooth_deg: float = 0.0):
+                    smooth_deg: float = 0.0, gain_limit_db: float | None = GAIN_LIMIT_DB):
     """One figure for one frequency and one cut, polarizations overlaid.
 
     cut='phi'  : fixed phi = value_deg, sweep theta (angle -180..180)
-    cut='theta': fixed theta = value_deg, sweep phi (0..360)
+    cut='theta': fixed theta = value_deg, sweep phi (0..360); polar plots are drawn top-down
+                 (0 deg at +X, counterclockwise) to match the XY view in the test report
     kind: 'polar' or 'rect'
     smooth_deg: sliding-window width in degrees; 0 turns smoothing off
+    gain_limit_db: dashed requirement line on rectangular plots; None to omit
+    Traces use the report's colors (POL_COLORS); principal planes are named in the title.
     """
     pols = pols or [k for k in DEFAULT_POLS if k in pattern.gain_db]
-    gains, angle = {}, None
+    gains, colors, angle = {}, {}, None
     for key in pols:
         if key not in pattern.gain_db:
             raise KeyError(f"{pattern.name}: no Gain{key} table (have {pattern.pols})")
@@ -135,23 +166,28 @@ def make_cut_figure(pattern: Pattern, cut: str, value_deg: float, kind: str = "p
             raise ValueError("cut must be 'phi' or 'theta'")
         step = float(np.median(np.diff(angle)))
         g = analysis.smooth_circular(g, step, smooth_deg)
-        gains[POL_LABELS.get(key, key)] = g
+        label = POL_LABELS.get(key, key)
+        gains[label] = g
+        if key in POL_COLORS:
+            colors[label] = POL_COLORS[key]
     applied_deg = analysis.effective_window_deg(step, smooth_deg)
 
     if kind == "polar":
         fig, ax = plt.subplots(subplot_kw={"projection": "polar"}, figsize=(7, 6.5),
                                constrained_layout=True)
-        plot_cut_polar(ax, angle, gains, dynamic_range_db)
+        plot_cut_polar(ax, angle, gains, dynamic_range_db, colors, top_down=(cut == "theta"))
         ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
     elif kind == "rect":
         fig, ax = plt.subplots(figsize=(9, 5), constrained_layout=True)
         plot_cut_rect(ax, angle, gains, "Theta (deg)" if cut == "phi" else "Phi (deg)",
-                      dynamic_range_db)
+                      dynamic_range_db, colors, gain_limit_db)
         ax.legend()
     else:
         raise ValueError("kind must be 'polar' or 'rect'")
 
     sym, fixed = ("φ", value_deg) if cut == "phi" else ("θ", value_deg)
     smooth_note = f"   ({applied_deg:g}° smoothing window)" if applied_deg else ""
-    ax.set_title(f"{pattern.freq_hz / 1e6:g} MHz   {sym} = {fixed:g}° cut{smooth_note}")
+    plane = plane_name(cut, value_deg)
+    what = f"{plane} plane ({sym} = {fixed:g}°)" if plane else f"{sym} = {fixed:g}° cut"
+    ax.set_title(f"{pattern.freq_hz / 1e6:g} MHz   {what}{smooth_note}")
     return fig

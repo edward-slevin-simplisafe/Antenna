@@ -304,3 +304,42 @@ def test_path_checks_do_not_import_heavy_libraries():
             "print([m for m in ('numpy', 'scipy', 'matplotlib', 'skrf') if m in sys.modules])")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert out.stdout.strip() == "[]", out.stderr or out.stdout
+
+
+# ---- axis limits / line width ---------------------------------------------------
+
+def test_limits_rules():
+    import numpy as np
+    from antenna.plotting import _limits
+    g = {"a": np.array([-10.0, 2.1])}  # auto top = 5
+    assert _limits(g, 40) == (-35, 5)
+    assert _limits(g, 40, rmax=0) == (-40, 0)  # lone rmax: floor follows --range
+    assert _limits(g, 40, rmin=-30) == (-30, 5)  # lone rmin: top stays automatic
+    assert _limits(g, 40, rmin=-45, rmax=5) == (-45, 5)
+    with pytest.raises(ValueError, match="below rmax"):
+        _limits(g, 40, rmin=6)
+    with pytest.raises(ValueError, match="below rmax"):
+        _limits(g, 40, rmin=-5, rmax=-5)
+
+
+def test_explicit_limits_reach_both_plot_types(pattern):
+    import matplotlib
+    matplotlib.use("Agg")
+    from antenna.plotting import make_cut_figure
+
+    rect = make_cut_figure(pattern, "phi", 0, "rect", rmin=-45, rmax=3).axes[0]
+    assert rect.get_ylim() == (-45, 3)  # explicit top wins even though the 4 dB line is above it
+    polar = make_cut_figure(pattern, "phi", 0, "polar", rmin=-45, rmax=5).axes[0]
+    assert (polar.get_rmin(), polar.get_rmax()) == (-45, 5)
+
+
+def test_traces_are_thick(pattern):
+    import matplotlib
+    matplotlib.use("Agg")
+    from antenna.plotting import TRACE_LINEWIDTH, make_cut_figure
+
+    for kind in ("polar", "rect"):
+        ax = make_cut_figure(pattern, "phi", 0, kind).axes[0]
+        widths = [ln.get_linewidth() for ln in ax.get_lines() if ln.get_label() in ("H+V", "H")]
+        assert widths == [TRACE_LINEWIDTH] * 2
+    assert TRACE_LINEWIDTH >= 2.5

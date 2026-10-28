@@ -46,7 +46,11 @@ def main():
                          "window is rounded to an odd number of samples (5 deg grid: 20 -> 25 deg),\n"
                          "and the plot title shows the width actually used")
     ap.add_argument("--range", type=float, default=40.0, dest="dyn_range",
-                    help="plot dynamic range in dB below the top (default 40)")
+                    help="plot dynamic range in dB below the top (default 40; unused if --rmin is given)")
+    ap.add_argument("--rmax", type=float, metavar="DB",
+                    help="top of the gain axis in dB (default: highest gain rounded up to a multiple of 5)")
+    ap.add_argument("--rmin", type=float, metavar="DB",
+                    help="bottom of the gain axis in dB (default: --range below the top)")
     ap.add_argument("--gain-limit", type=float, default=GAIN_LIMIT_DB, metavar="DB",
                     help=f"dashed max-gain requirement line on rectangular plots (default {GAIN_LIMIT_DB:g})")
     ap.add_argument("--no-gain-limit", action="store_true", help="omit the gain limit line")
@@ -54,6 +58,8 @@ def main():
     args = ap.parse_args()
     gain_limit = None if args.no_gain_limit else args.gain_limit
 
+    if args.rmin is not None and args.rmax is not None and args.rmin >= args.rmax:
+        ap.error(f"--rmin ({args.rmin:g}) must be below --rmax ({args.rmax:g})")
     if bool(args.cut) != bool(args.angles):
         ap.error("--cut and --angles must be given together")
     cuts = [PLANES[p] for p in args.plane or []]
@@ -103,7 +109,7 @@ def main():
                 say(f"({count}/{total}) {pattern.freq_hz / 1e6:g} MHz {where} {kind}")
                 try:
                     fig = make_cut_figure(pattern, cut, angle, kind, args.pols, args.dyn_range,
-                                          args.smooth, gain_limit)
+                                          args.smooth, gain_limit, args.rmin, args.rmax)
                 except (KeyError, ValueError) as err:
                     sys.exit(f"error: {err}")
                 if args.save_dir:

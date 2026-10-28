@@ -92,25 +92,40 @@ def make_smith_figure(series: list[S11Data], **kwargs):
 
 # ---- Radiation patterns ----------------------------------------------------
 
-def _limits(gains: dict[str, np.ndarray], dynamic_range_db: float):
-    top = max(float(np.nanmax(g)) for g in gains.values())
-    rmax = 5 * math.ceil(top / 5) if top > 0 else 5 * math.ceil((top + 0.001) / 5)
-    return rmax - dynamic_range_db, rmax
+TRACE_LINEWIDTH = 2.5  # pattern traces (matplotlib's default is 1.5)
+
+
+def _limits(gains: dict[str, np.ndarray], dynamic_range_db: float,
+            rmin: float | None = None, rmax: float | None = None):
+    """Gain-axis (bottom, top) in dB.
+
+    Explicit rmin/rmax win. By default the top is the highest gain rounded up to a multiple of
+    5 dB. A lone rmax puts the bottom dynamic_range_db below it; a lone rmin keeps the top automatic.
+    """
+    if rmax is None:
+        peak = max(float(np.nanmax(g)) for g in gains.values())
+        top = 5 * math.ceil(peak / 5) if peak > 0 else 5 * math.ceil((peak + 0.001) / 5)
+    else:
+        top = rmax
+    bottom = rmin if rmin is not None else top - dynamic_range_db
+    if bottom >= top:
+        raise ValueError(f"rmin ({bottom:g} dB) must be below rmax ({top:g} dB)")
+    return bottom, top
 
 
 def plot_cut_polar(ax, angle_deg: np.ndarray, gains: dict[str, np.ndarray],
                    dynamic_range_db: float = 40.0, colors: dict[str, str] | None = None,
-                   top_down: bool = False):
+                   top_down: bool = False, rmin: float | None = None, rmax: float | None = None):
     """Polar overlay. `ax` needs projection='polar'.
 
     Default: 0 deg at the top, increasing clockwise (theta sweeps of the XZ/YZ cuts).
     top_down=True: 0 deg at the right, increasing counterclockwise, i.e. the view from +Z
     for an azimuth (phi) sweep, so +X is right and +Y is up.
     """
-    rmin, rmax = _limits(gains, dynamic_range_db)
+    rmin, rmax = _limits(gains, dynamic_range_db, rmin, rmax)
     for label, g in gains.items():
         ax.plot(np.deg2rad(angle_deg), np.maximum(g, rmin), label=label,
-                color=(colors or {}).get(label), lw=1.8)
+                color=(colors or {}).get(label), lw=TRACE_LINEWIDTH)
     if top_down:
         ax.set_theta_zero_location("E")
         ax.set_theta_direction(1)
@@ -124,14 +139,17 @@ def plot_cut_polar(ax, angle_deg: np.ndarray, gains: dict[str, np.ndarray],
 
 def plot_cut_rect(ax, angle_deg: np.ndarray, gains: dict[str, np.ndarray], xlabel: str,
                   dynamic_range_db: float = 40.0, colors: dict[str, str] | None = None,
-                  limit_db: float | None = None):
+                  limit_db: float | None = None, rmin: float | None = None,
+                  rmax: float | None = None):
     """Rectangular overlay; limit_db draws a dashed requirement line (e.g. max gain)."""
-    rmin, rmax = _limits(gains, dynamic_range_db)
+    auto_top = rmax is None
+    rmin, rmax = _limits(gains, dynamic_range_db, rmin, rmax)
     for label, g in gains.items():
-        ax.plot(angle_deg, g, label=label, color=(colors or {}).get(label), lw=1.8)
+        ax.plot(angle_deg, g, label=label, color=(colors or {}).get(label), lw=TRACE_LINEWIDTH)
     if limit_db is not None:
-        ax.axhline(limit_db, color="black", ls="--", lw=1.2, label=f"{limit_db:g} dB limit")
-        rmax = max(rmax, limit_db + 1)  # keep the limit line inside the plot
+        ax.axhline(limit_db, color="black", ls="--", lw=1.6, label=f"{limit_db:g} dB limit")
+        if auto_top:  # keep the limit line inside the plot unless the top was set explicitly
+            rmax = max(rmax, limit_db + 1)
     ax.set_xlim(angle_deg.min(), angle_deg.max())
     ax.set_ylim(rmin, rmax)
     ax.set_xticks(np.arange(math.ceil(angle_deg.min() / 30) * 30, angle_deg.max() + 1, 30))
@@ -142,7 +160,8 @@ def plot_cut_rect(ax, angle_deg: np.ndarray, gains: dict[str, np.ndarray], xlabe
 
 def make_cut_figure(pattern: Pattern, cut: str, value_deg: float, kind: str = "polar",
                     pols: list[str] | None = None, dynamic_range_db: float = 40.0,
-                    smooth_deg: float = 0.0, gain_limit_db: float | None = GAIN_LIMIT_DB):
+                    smooth_deg: float = 0.0, gain_limit_db: float | None = GAIN_LIMIT_DB,
+                    rmin: float | None = None, rmax: float | None = None):
     """One figure for one frequency and one cut, polarizations overlaid.
 
     cut='phi'  : fixed phi = value_deg, sweep theta (angle -180..180)
@@ -151,6 +170,8 @@ def make_cut_figure(pattern: Pattern, cut: str, value_deg: float, kind: str = "p
     kind: 'polar' or 'rect'
     smooth_deg: sliding-window width in degrees; 0 turns smoothing off
     gain_limit_db: dashed requirement line on rectangular plots; None to omit
+    rmin, rmax: gain-axis limits in dB (polar radius / rectangular y axis). Default: the top is
+                the highest gain rounded up to a multiple of 5, the bottom dynamic_range_db below.
     Traces use the report's colors (POL_COLORS); principal planes are named in the title.
     """
     pols = pols or [k for k in DEFAULT_POLS if k in pattern.gain_db]
@@ -175,12 +196,13 @@ def make_cut_figure(pattern: Pattern, cut: str, value_deg: float, kind: str = "p
     if kind == "polar":
         fig, ax = plt.subplots(subplot_kw={"projection": "polar"}, figsize=(7, 6.5),
                                constrained_layout=True)
-        plot_cut_polar(ax, angle, gains, dynamic_range_db, colors, top_down=(cut == "theta"))
+        plot_cut_polar(ax, angle, gains, dynamic_range_db, colors, top_down=(cut == "theta"),
+                       rmin=rmin, rmax=rmax)
         ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
     elif kind == "rect":
         fig, ax = plt.subplots(figsize=(9, 5), constrained_layout=True)
         plot_cut_rect(ax, angle, gains, "Theta (deg)" if cut == "phi" else "Phi (deg)",
-                      dynamic_range_db, colors, gain_limit_db)
+                      dynamic_range_db, colors, gain_limit_db, rmin, rmax)
         ax.legend()
     else:
         raise ValueError("kind must be 'polar' or 'rect'")

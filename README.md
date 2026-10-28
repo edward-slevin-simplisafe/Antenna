@@ -78,6 +78,10 @@ tables are read but not plotted by default (see Open items).
 - **Theta cuts** (the XY plane) sweep phi and are drawn top-down: 0 degrees at +X, increasing
   counterclockwise, matching the vendor report's XY view.
 - **Colors** follow the vendor test report: H light green, V red, H+V dark blue.
+- **Gain axis:** by default the top is the highest gain rounded up to a multiple of 5 dB and the
+  bottom is `--range` (40 dB) below it. `--rmax` and `--rmin` set the limits explicitly on both
+  polar and rectangular plots (for example `--rmax 5 --rmin -45` matches the vendor report). A lone
+  `--rmax` puts the bottom `--range` below it; a lone `--rmin` keeps the top automatic.
 - **Gain limit:** a dashed 4 dB line is drawn on rectangular plots (`--gain-limit`, `--no-gain-limit`).
 - **S11 markers** default to the 2.4 GHz Wi-Fi band edges and center: 2400, 2442 and 2483 MHz.
 - **Smoothing** (`--smooth`) is a sliding window across angle, averaged in linear power and wrapped
@@ -145,8 +149,8 @@ options:
 ```text
 usage: plot_patterns.py [-h] [--plane {XY,XZ,YZ} [{XY,XZ,YZ} ...]] [--cut {phi,theta}]
                         [--angles ANGLES [ANGLES ...]] [--kind {polar,rect} [{polar,rect} ...]]
-                        [--pols POLS [POLS ...]] [--smooth [DEG]] [--range DYN_RANGE]
-                        [--gain-limit DB] [--no-gain-limit] [--save-dir SAVE_DIR]
+                        [--pols POLS [POLS ...]] [--smooth [DEG]] [--range DYN_RANGE] [--rmax DB]
+                        [--rmin DB] [--gain-limit DB] [--no-gain-limit] [--save-dir SAVE_DIR]
                         inputs [inputs ...]
 
 Plot radiation-pattern cuts, one figure per frequency, polarizations overlaid.
@@ -184,7 +188,9 @@ options:
                         --smooth 20 = 20 deg window. Averaged in linear power, wraps at the seam; the
                         window is rounded to an odd number of samples (5 deg grid: 20 -> 25 deg),
                         and the plot title shows the width actually used
-  --range DYN_RANGE     plot dynamic range in dB below the top (default 40)
+  --range DYN_RANGE     plot dynamic range in dB below the top (default 40; unused if --rmin is given)
+  --rmax DB             top of the gain axis in dB (default: highest gain rounded up to a multiple of 5)
+  --rmin DB             bottom of the gain axis in dB (default: --range below the top)
   --gain-limit DB       dashed max-gain requirement line on rectangular plots (default 4)
   --no-gain-limit       omit the gain limit line
   --save-dir SAVE_DIR   save PNGs here instead of showing

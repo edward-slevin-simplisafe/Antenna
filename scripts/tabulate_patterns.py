@@ -6,6 +6,7 @@ occurs and which side of the device that is, and the total gain toward each side
     python scripts/tabulate_patterns.py data/01_pattern
     python scripts/tabulate_patterns.py data/01_pattern --output output/sample1.csv
     python scripts/tabulate_patterns.py "data/01_pattern/01-24[45]*.csv"
+    python scripts/tabulate_patterns.py data/01_pattern --vendor data/vendor_report_v1.9.csv
 
 Sides of the device (set in ORIENTATION in antenna/models.py; Right and Left are as seen from
 the front):
@@ -35,6 +36,12 @@ the whole sphere. That equals the antenna efficiency (radiated power / input pow
 is absolute, meaning referenced to the power fed to the antenna, as chamber gain normally is. It
 can differ from an efficiency a vendor reports, depending on how that is defined and measured.
 
+Vendor comparison (optional): --vendor FILE reads the numbers from a vendor's test report and
+shows them beside ours: peak gain and efficiency, and the difference (ours minus the vendor's;
+for efficiency, our value over theirs in dB). FILE is a CSV with the columns freq_MHz,
+peak_gain_dBi and efficiency_pct, one row per frequency. Lines starting with # are comments and
+a blank cell means the vendor gave no number. The columns are added to the output CSV as well.
+
 Files may be given as paths, directories (all *.csv directly inside) or glob patterns. The
 frequency is read from the filename (e.g. 01-2400.000000MHz.csv).
 """
@@ -60,7 +67,12 @@ def main():
     ap.add_argument("inputs", nargs="+", help="pattern CSV files, directories or globs")
     ap.add_argument("-o", "--output", type=Path,
                     help="CSV file to write (default: output/<folder name>_summary.csv)")
+    ap.add_argument("--vendor", type=Path, metavar="FILE",
+                    help="CSV of the vendor report's peak gain and efficiency "
+                         "(freq_MHz, peak_gain_dBi, efficiency_pct) to compare with")
     args = ap.parse_args()
+    if args.vendor and not args.vendor.is_file():  # fail fast, before the library load
+        sys.exit(f"error: {args.vendor}: vendor report file not found")
 
     try:  # fail fast on a typo, before the library load
         files = find_pattern_files(args.inputs)
@@ -84,6 +96,9 @@ def main():
         patterns = load_patterns(files, on_file=reading)
         say("Computing peak gain and the gain in each major direction...")
         rows = tables.summary_rows(patterns)
+        if args.vendor:
+            say(f"Reading vendor report numbers from {args.vendor}")
+            rows = tables.add_vendor_columns(rows, tables.read_vendor_report(args.vendor))
     except (FileNotFoundError, ValueError, KeyError) as err:
         sys.exit(f"error: {err}")
 
@@ -98,6 +113,10 @@ def main():
           "the efficiency:\n")
     print(tables.format_summary_table(rows))
     print("\n" + tables.summary_note(rows))
+    if args.vendor:
+        print("\nComparison with the vendor report (our peak gain and efficiency vs. theirs):\n")
+        print(tables.format_vendor_table(rows))
+        print("\n" + tables.vendor_note(rows))
     note = tables.pole_note(rows)
     print(f"\n{note}\n" if note else "")
 

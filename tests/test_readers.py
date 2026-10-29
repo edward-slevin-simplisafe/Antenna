@@ -681,3 +681,83 @@ def test_summary_terminal_table(pattern):
         assert label in head1
     assert head2.split() == ["dB", "dB", "dB", "%"]
     assert len(first.split()) == 5  # frequency, three differences, efficiency
+
+
+# ---- vendor report comparison ---------------------------------------------------------------
+
+VENDOR_CSV = """# source: a vendor report
+freq_MHz,peak_gain_dBi,efficiency_pct
+
+2400,4.0,50
+2450,3.5,
+"""
+
+
+def _vendor_file(tmp_path, text=VENDOR_CSV):
+    f = tmp_path / "vendor.csv"
+    f.write_text(text, encoding="utf-8")
+    return f
+
+
+def test_read_vendor_report_skips_comments_and_allows_blank_cells(tmp_path):
+    from antenna.tables import read_vendor_report
+    vendor = read_vendor_report(_vendor_file(tmp_path))
+    assert vendor == {2400.0: {"peak_gain_dBi": 4.0, "efficiency_pct": 50.0},
+                      2450.0: {"peak_gain_dBi": 3.5, "efficiency_pct": None}}
+
+
+def test_read_vendor_report_errors(tmp_path):
+    from antenna.tables import read_vendor_report
+    with pytest.raises(FileNotFoundError, match="not found"):
+        read_vendor_report(tmp_path / "nope.csv")
+    with pytest.raises(ValueError, match=r"missing column\(s\) efficiency_pct"):
+        read_vendor_report(_vendor_file(tmp_path, "freq_MHz,peak_gain_dBi\n2400,3\n"))
+    with pytest.raises(ValueError, match="not a number.*2400"):
+        read_vendor_report(_vendor_file(tmp_path, "freq_MHz,peak_gain_dBi,efficiency_pct\n2400,abc,50\n"))
+
+
+def test_add_vendor_columns_differences_and_matching(pattern, tmp_path):
+    import math
+    from antenna.tables import (EFFICIENCY_COLUMN, add_vendor_columns, read_vendor_report,
+                                summary_rows)
+    rows = summary_rows([pattern])  # 2400 MHz: peak 5 dBi
+    out = add_vendor_columns(rows, read_vendor_report(_vendor_file(tmp_path)))[0]
+    assert out["vendor_peak_gain_dBi"] == 4.0 and out["peak_gain_vs_vendor_dB"] == pytest.approx(1.0)
+    assert out["vendor_efficiency_pct"] == 50.0
+    assert out["efficiency_vs_vendor_dB"] == pytest.approx(10 * math.log10(out[EFFICIENCY_COLUMN] / 50))
+    assert "vendor_peak_gain_dBi" not in rows[0]  # the input rows are not modified
+
+    near = add_vendor_columns(rows, {2400.3: {"peak_gain_dBi": 4.5, "efficiency_pct": 60.0}})[0]
+    assert near["vendor_peak_gain_dBi"] == 4.5  # within 0.5 MHz counts as the same frequency
+    far = add_vendor_columns(rows, {2401.0: {"peak_gain_dBi": 4.5, "efficiency_pct": 60.0}})[0]
+    assert far["vendor_peak_gain_dBi"] is None and far["peak_gain_vs_vendor_dB"] is None
+    assert far["efficiency_vs_vendor_dB"] is None
+
+
+def test_vendor_columns_in_csv_and_terminal(pattern, tmp_path):
+    import csv
+    from antenna.tables import (COLUMNS, VENDOR_COLUMNS, add_vendor_columns, format_vendor_table,
+                                summary_rows, vendor_note, write_csv)
+    plain = summary_rows([pattern])
+    with_vendor = add_vendor_columns(plain, {2400.0: {"peak_gain_dBi": 4.0, "efficiency_pct": None}})
+    assert list(csv.reader(open(write_csv(plain, tmp_path / "a.csv"), newline="")))[0] == COLUMNS
+    lines = list(csv.reader(open(write_csv(with_vendor, tmp_path / "b.csv"), newline="")))
+    assert lines[0] == COLUMNS + VENDOR_COLUMNS
+    assert lines[1][-4:] == ["4.00", "1.00", "", ""]  # blank, not "None", where the vendor gave none
+
+    head1, head2, first = format_vendor_table(with_vendor).splitlines()
+    assert head1.split()[:3] == ["MHz", "Peak", "gain"] and "Vendor" in head1
+    assert first.split()[-2:] == ["-", "-"]  # missing vendor efficiency shows as "-" in the terminal
+    assert "1 of 1 frequencies" in vendor_note(with_vendor)
+    assert "Peak gain differs by +1.00 dB" in vendor_note(with_vendor)
+    assert "Efficiency differs" not in vendor_note(with_vendor)  # nothing to compare
+
+
+def test_no_negative_zero_and_clean_note():
+    from antenna.tables import _text, vendor_note
+    assert _text("x_dB", -0.0004) == "0.00" and _text("x_dB", -0.0149) == "-0.01"
+    rows = [{"freq_MHz": 2400.0, "vendor_peak_gain_dBi": 3.0, "peak_gain_vs_vendor_dB": -0.0003,
+             "vendor_efficiency_pct": 60.0, "efficiency_vs_vendor_dB": -0.8}]
+    note = vendor_note(rows)
+    assert "Peak gain differs by 0.00 dB" in note and "-0.00" not in note
+    assert "Efficiency differs by -0.80 dB" in note

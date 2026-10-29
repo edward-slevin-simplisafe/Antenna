@@ -85,6 +85,19 @@ GainH,...                      <- next table
 The tables currently in use are `T` (total, labeled **H+V** in plots), `H` and `V`. The `L` and `S`
 tables are read but not plotted by default (see Open items).
 
+**Vendor report numbers (optional, for `tabulate_patterns.py --vendor`):** a small CSV you write
+from a vendor's test report, one row per frequency. Lines starting with `#` are comments, and a
+blank cell means the vendor gave no number for that frequency:
+
+```
+# source: vendor test report, "Peak Gain & Efficiency" table
+freq_MHz,peak_gain_dBi,efficiency_pct
+2400,3.07,57.95
+2410,3.11,58.23
+```
+
+The sample file `data/vendor_report_v1.9.csv` lives with your other data and is not tracked by git.
+
 ## Conventions
 
 - **Angles:** theta is measured from +Z and phi from +X toward +Y.
@@ -205,6 +218,9 @@ python scripts/plot_patterns.py data/01_pattern --plane XY XZ YZ --smooth 20 --s
 
 # Gain table (no plots): peak, gain toward and averaged over each side, side-to-side differences, efficiency
 python scripts/tabulate_patterns.py data/01_pattern
+
+# Same, with our peak gain and efficiency shown beside the vendor report's
+python scripts/tabulate_patterns.py data/01_pattern --vendor data/vendor_report_v1.9.csv
 ```
 
 Saved filenames look like `01_db.png`, `01_smith.png` and `2450MHz_XY_polar.png`
@@ -309,7 +325,7 @@ options:
 ### `tabulate_patterns.py --help`
 
 ```text
-usage: tabulate_patterns.py [-h] [-o OUTPUT] inputs [inputs ...]
+usage: tabulate_patterns.py [-h] [-o OUTPUT] [--vendor FILE] inputs [inputs ...]
 
 Tabulate radiation-pattern gains into a CSV file (no plots), one row per frequency.
 
@@ -319,6 +335,7 @@ occurs and which side of the device that is, and the total gain toward each side
     python scripts/tabulate_patterns.py data/01_pattern
     python scripts/tabulate_patterns.py data/01_pattern --output output/sample1.csv
     python scripts/tabulate_patterns.py "data/01_pattern/01-24[45]*.csv"
+    python scripts/tabulate_patterns.py data/01_pattern --vendor data/vendor_report_v1.9.csv
 
 Sides of the device (set in ORIENTATION in antenna/models.py; Right and Left are as seen from
 the front):
@@ -348,6 +365,12 @@ the whole sphere. That equals the antenna efficiency (radiated power / input pow
 is absolute, meaning referenced to the power fed to the antenna, as chamber gain normally is. It
 can differ from an efficiency a vendor reports, depending on how that is defined and measured.
 
+Vendor comparison (optional): --vendor FILE reads the numbers from a vendor's test report and
+shows them beside ours: peak gain and efficiency, and the difference (ours minus the vendor's;
+for efficiency, our value over theirs in dB). FILE is a CSV with the columns freq_MHz,
+peak_gain_dBi and efficiency_pct, one row per frequency. Lines starting with # are comments and
+a blank cell means the vendor gave no number. The columns are added to the output CSV as well.
+
 Files may be given as paths, directories (all *.csv directly inside) or glob patterns. The
 frequency is read from the filename (e.g. 01-2400.000000MHz.csv).
 
@@ -357,6 +380,7 @@ positional arguments:
 options:
   -h, --help           show this help message and exit
   -o, --output OUTPUT  CSV file to write (default: output/<folder name>_summary.csv)
+  --vendor FILE        CSV of the vendor report's peak gain and efficiency (freq_MHz, peak_gain_dBi, efficiency_pct) to compare with
 ```
 
 ## Performance
@@ -386,6 +410,12 @@ The tests build small synthetic `.s1p` and pattern files, so they do not depend 
   the same shape across the band. Mismatch loss (about 0.04 dB at 2450 MHz and 0.2 dB at 2400 MHz
   from the report's return loss) and the 0.13 dB cable loss are too small to explain it. The cause
   has not been identified; it may be how the vendor defines or measures efficiency, so ask them.
+  The peak gain, by contrast, matches the report exactly at every frequency. `--vendor` puts the two
+  side by side.
+- **Vendor pass/fail criteria:** the report states criteria (peak gain at most 3.5 dBi, efficiency at
+  least 55%, return loss below -10 dB over 2400-2500 MHz). They are not applied as pass/fail here.
+  Applying the efficiency criterion to `efficiency_from_gain_pct` would mark most of the band as a
+  fail where the vendor's own figures pass, until the discrepancy above is understood.
 - **`L` and `S` tables:** it is not yet confirmed what these represent (possibly circular
   polarizations), so they are excluded from plots by default. Add them with `--pols T H V L S`.
 - **H/V labeling vs. the vendor report:** the `GainH` and `GainV` tables are plotted exactly as

@@ -3,7 +3,7 @@
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-from antenna.models import Pattern, S11Data
+from antenna.models import DIRECTION_TOLERANCE_DEG, ORIENTATION, Pattern, S11Data
 
 
 # ---- S11 -------------------------------------------------------------------
@@ -123,8 +123,129 @@ def smooth_circular(gain_db: np.ndarray, step_deg: float, window_deg: float) -> 
     return np.append(out, out[0])
 
 
+def _phi_samples(pattern: Pattern, pol: str, theta_deg: float) -> np.ndarray:
+    """Gain (dB) around the full phi circle at fixed theta, without the repeated closing sample."""
+    phi, gain = cut_theta(pattern, pol, theta_deg)
+    return gain[:-1] if phi[-1] - phi[0] >= 360.0 - 1e-9 else gain
+
+
+def gain_at(pattern: Pattern, pol: str, theta_deg: float, phi_deg: float | None) -> float:
+    """Gain (dB) in one direction: exactly the measured value at a grid point, linearly
+    interpolated between grid points. phi_deg=None gives the power average over all phi
+    (for the poles, where phi has no meaning)."""
+    lo, hi = pattern.theta_deg[0], pattern.theta_deg[-1]
+    if not lo <= theta_deg <= hi:
+        raise ValueError(f"{pattern.name}: theta={theta_deg:g} is outside the measured "
+                         f"range {lo:g} to {hi:g}")
+    if phi_deg is None:
+        return float(10 * np.log10(np.mean(10 ** (_phi_samples(pattern, pol, theta_deg) / 10))))
+    point = [[theta_deg, float(_wrap_phi(pattern, phi_deg))]]
+    return float(_interpolator(pattern, pol)(point)[0])
+
+
+def phi_spread_db(pattern: Pattern, pol: str, theta_deg: float) -> float:
+    """Max minus min gain (dB) around the phi circle at fixed theta; 0 for an ideal pole."""
+    samples = _phi_samples(pattern, pol, theta_deg)
+    return float(samples.max() - samples.min())
+
+
+def _trapezoid_weights(x: np.ndarray) -> np.ndarray:
+    """Trapezoid-rule weights for samples at ascending positions x."""
+    w = np.zeros(len(x))
+    half_gaps = np.diff(x) / 2
+    w[:-1] += half_gaps
+    w[1:] += half_gaps
+    return w
+
+
+def hemisphere_gain(pattern: Pattern, pol: str, axis: str) -> float:
+    """Average gain (dB) over the half of the sphere facing an axis direction such as 'Y-'.
+
+    Every measured point is weighted by the solid angle it stands for (sin(theta) times the grid
+    spacing), because points near the poles cover much less area than points near the equator.
+    The average is taken in linear power and converted back to dB, so deep nulls do not drag it
+    down the way an average of dB values would. Points exactly on the dividing circle count half
+    in each hemisphere, which is exact when the grid spacing divides 90 degrees (a 5 degree grid
+    does). Needs a full-sphere measurement (theta 0 to 180, phi spanning 360 degrees).
+    """
+    if len(axis) != 2 or axis[0] not in "XYZ" or axis[1] not in "+-":
+        raise ValueError(f"axis must look like 'X+' or 'Y-', not {axis!r}")
+    theta, phi, area = _sphere_grid(pattern, "a half-sphere average")
+    component = {"X": np.sin(theta) * np.cos(phi), "Y": np.sin(theta) * np.sin(phi),
+                 "Z": np.cos(theta) * np.ones_like(phi)}[axis[0]]
+    facing = component if axis[1] == "+" else -component
+    membership = np.where(facing > 1e-9, 1.0, np.where(facing >= -1e-9, 0.5, 0.0))
+    weight = area * membership
+    power = 10 ** (pattern.gain_db[pol] / 10)
+    return float(10 * np.log10((power * weight).sum() / weight.sum()))
+
+
+def mean_gain_linear(pattern: Pattern, pol: str) -> float:
+    """Average of the linear gain over the whole sphere (area-weighted), as a plain ratio.
+
+    For absolute gain, meaning gain referenced to the power fed to the antenna, this equals the
+    fraction of that power that is radiated, i.e. the antenna efficiency. For a gain pattern that
+    is only normalized (for example to its peak) it means nothing of the sort.
+    """
+    _, _, area = _sphere_grid(pattern, "a whole-sphere average")
+    power = 10 ** (pattern.gain_db[pol] / 10)
+    return float((power * area).sum() / area.sum())
+
+
+def _sphere_grid(pattern: Pattern, what: str):
+    """(theta, phi, area) for a full-sphere pattern: theta as a column and phi as a row of angles
+    in radians, and the solid-angle weight of each grid point (sin(theta) times the spacing)."""
+    theta_deg, phi_deg = pattern.theta_deg, pattern.phi_deg
+    if theta_deg[0] > 1e-9 or theta_deg[-1] < 180 - 1e-9 or phi_deg[-1] - phi_deg[0] < 360 - 1e-9:
+        raise ValueError(f"{pattern.name}: {what} needs a full-sphere measurement "
+                         "(theta 0 to 180 and phi spanning 360 degrees)")
+    theta = np.deg2rad(theta_deg)[:, None]
+    phi = np.deg2rad(phi_deg)[None, :]
+    area = (np.sin(theta[:, 0]) * _trapezoid_weights(theta[:, 0]))[:, None] \
+        * _trapezoid_weights(phi[0])[None, :]
+    return theta, phi, area
+
+
 def peak_gain(pattern: Pattern, pol: str):
     """(gain_db, theta_deg, phi_deg) of the maximum grid point."""
     g = pattern.gain_db[pol]
     it, ip = np.unravel_index(np.argmax(g), g.shape)
     return float(g[it, ip]), float(pattern.theta_deg[it]), float(pattern.phi_deg[ip])
+
+
+def direction_label(theta_deg: float, phi_deg: float, orientation: dict[str, str] = ORIENTATION,
+                    tol_deg: float = DIRECTION_TOLERANCE_DEG) -> str:
+    """Name a (theta, phi) direction by the device's sides, e.g. 'Bottom-Front-Left'.
+
+    Theta picks Top (above the horizon) or Bottom, and phi picks the quadrant of the horizontal
+    plane: +X..+Y, +Y..-X, -X..-Y or -Y..+X. A direction within tol_deg of an axis is named by
+    that axis alone: near a pole just Top or Bottom, near the horizon no Top/Bottom word, and
+    near +/-X or +/-Y a single side. In a two-side name the one on the Y axis comes first.
+
+    orientation maps each side name to an axis direction ('Front' -> 'Y-'), as in
+    antenna.models.ORIENTATION. Theta runs from +Z and phi from +X toward +Y.
+    """
+    if not 0 <= theta_deg <= 180:
+        raise ValueError(f"theta={theta_deg:g} is outside 0 to 180")
+    side = {axis: name for name, axis in orientation.items()}
+    if theta_deg <= tol_deg:
+        return side["Z+"]
+    if theta_deg >= 180 - tol_deg:
+        return side["Z-"]
+
+    parts = []
+    if theta_deg < 90 - tol_deg:
+        parts.append(side["Z+"])
+    elif theta_deg > 90 + tol_deg:
+        parts.append(side["Z-"])
+
+    phi = phi_deg % 360
+    axes = ["X+", "Y+", "X-", "Y-"]  # at phi = 0, 90, 180, 270
+    nearest = round(phi / 90)
+    if abs(phi - 90 * nearest) <= tol_deg:
+        parts.append(side[axes[nearest % 4]])
+    else:
+        quadrant = int(phi // 90)
+        pair = [axes[quadrant], axes[(quadrant + 1) % 4]]
+        parts += [side[ax] for ax in sorted(pair, key=lambda ax: ax[0] != "Y")]
+    return "-".join(parts)

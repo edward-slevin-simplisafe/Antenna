@@ -47,10 +47,12 @@ Antenna/
 │   │   └── pattern.py        # .csv  -> Pattern        (one file per frequency)
 │   ├── analysis.py           # pure numeric functions, no file I/O and no plotting
 │   ├── feedback.py           # timestamped progress messages for the scripts
+│   ├── tables.py             # per-frequency gain summary table (rows, CSV, terminal text)
 │   └── plotting.py           # matplotlib drawing, plus helpers that build whole figures
 ├── scripts/                  # thin command-line wrappers
 │   ├── plot_s11.py
-│   └── plot_patterns.py
+│   ├── plot_patterns.py
+│   └── tabulate_patterns.py  # gain summary table, no plots
 ├── tests/                    # pytest; uses small synthetic files, not your data
 ├── data/                     # your measurements (not tracked by git)
 ├── output/                   # saved plots (ignored by git)
@@ -101,11 +103,89 @@ tables are read but not plotted by default (see Open items).
 - **S11 shading:** the dB plot shades the 2.4 GHz Wi-Fi band covering channels 1-13
   (2400-2483.5 MHz) and lists it in the legend; `--band LOW HIGH` or `--no-band` changes it.
   `--ymin` and `--ymax` set the dB axis limits (either may be given alone).
+- **Gain table** (`tabulate_patterns.py`): one row per frequency with the peak total (H+V) gain,
+  the theta and phi where it occurs, which side of the device that is, and the total gain toward
+  each side, written to `output/<folder>_summary.csv` and printed in the terminal.
+  - **Device sides:** Front = -Y, Rear = +Y, Right = +X, Left = -X (right and left as seen from
+    the front), Top = +Z and Bottom = -Z. They are set in one place, `ORIENTATION` in
+    `antenna/models.py`; if the measurement orientation changes, edit that table and the column
+    headers and peak-direction wording follow. CSV columns look like `Front(-Y)_gain_dBi`.
+  - **Peak direction:** named from theta (Top above the horizon, Bottom below) and the quadrant of
+    phi, for example `Bottom-Front-Left` (theta 135, phi 240). A peak within 22.5 degrees of an
+    axis is named by that side alone (`Front`, `Top`), and near the horizon there is no
+    Top/Bottom word.
+  - **Half-sphere averages:** a second set of columns (`Front(-Y)_half_avg_dBi`, ...) gives the
+    average gain over the half of the sphere facing each side, to show which side radiates more
+    overall. See [Reading the gain table](#reading-the-gain-table).
+  - **Summary numbers:** `Front_minus_Rear_dB`, `Right_minus_Left_dB` and `Top_minus_Bottom_dB` are
+    the half-sphere average of the first side minus that of the second (positive means the first
+    side is stronger), and `efficiency_from_gain_pct` is the average of the linear gain over the
+    whole sphere, as a percentage. See the efficiency caveat below and in Open items.
+  - **Values:** Front, Rear, Right and Left are measured grid points. The measured gain at the
+    poles (Top, Bottom) varies with phi (up to about 3 dB in the sample data), so those two are
+    the power average over all phi, and the script prints a note saying how large the variation
+    is.
 - **Pattern text and ticks:** axis labels, tick labels, legends and titles are larger than the
   matplotlib default, and polar plots have a grid line and label every 10 degrees.
 - **Smoothing** (`--smooth`) is a sliding window across angle, averaged in linear power and wrapped
   around the seam. The window is rounded to an odd number of samples, and the plot title shows the
   width actually used. Smoothing lowers peaks, so quote peak gain from the unsmoothed data.
+
+## Reading the gain table
+
+This explains `tabulate_patterns.py` in plain language, for anyone who did not see the raw data.
+
+**What was measured.** The antenna was measured in an anechoic chamber, with one data file per
+frequency. The chamber records the gain in dBi on a 5 degree grid covering the whole sphere around
+the device: theta is the angle down from the top of the device (0 to 180 degrees) and phi is the
+angle around it (0 to 360 degrees). We use the total gain, which is the sum of the horizontally and
+vertically polarized power (H+V).
+
+**Sides of the device.** For the doorbell camera: Front = -Y, Rear = +Y, Right = +X and Left = -X
+(right and left as seen from the front), Top = +Z and Bottom = -Z.
+
+**Peak gain.** The highest gain on the grid, the theta and phi where it occurs, and a plain
+direction. Theta says Top or Bottom (above or below the horizon), and phi says which of the four
+horizontal quadrants it is in, for example "Bottom-Front-Left". A peak close to one axis is named by
+that side alone, such as "Front".
+
+**Gain toward each side (on-axis).** The gain measured exactly in the direction of each side. Each
+is a single direction, so it is sensitive to ripple in the pattern: a narrow dip right on an axis
+makes that side look weak even if the side as a whole radiates well. Top and Bottom are the poles,
+where the measured gain varies a little with phi, so those two are averaged over phi.
+
+**Half-sphere average gain.** To compare sides more fairly, the sphere is split in half three ways
+(front/rear, right/left, top/bottom) and the gain is averaged over each half. Two details keep this
+honest. Each measured point is weighted by the area of the sphere it stands for, because near the
+poles a grid point covers very little area. And the averaging is done in power, not in dB, because
+an average of dB values lets deep nulls dominate. A half-sphere average answers "which side
+radiates more overall?". It is a comparison between sides, not an efficiency; for efficiency use the
+figure the vendor reports.
+
+**Summary numbers.** Three columns compare opposite sides: Front minus Rear, Right minus Left, and Top
+minus Bottom, each the difference between the two half-sphere averages in dB. A positive number
+means the first side is stronger and a negative number means the second is. For example, "Front
+minus Rear = 3.7 dB" says that on average the front half of the sphere has 3.7 dB more gain than
+the rear half. A number near zero means the two sides are about equally strong.
+
+**Efficiency.** Gain in dBi is measured relative to the power fed to the antenna, so averaging the
+gain over the whole sphere gives the fraction of that power which is radiated: the antenna
+efficiency. This only works because the chamber reports absolute gain, calibrated against a
+reference antenna of known gain. Efficiency is computed here from the measured gain and is not
+read from any file. It can come out different from an efficiency a vendor reports, depending on how
+the vendor defines and measures it, so quote the vendor's figure when you need theirs and treat
+this one as a cross-check (see Open items).
+
+**Reading them together.** The peak shows where the strongest lobe is. The on-axis values show what
+you get along exactly those lines. The half-sphere averages and the differences show which side is
+stronger overall. They can disagree, and that is information about the pattern, not an error. At
+2450 MHz the peak (3.41 dBi) is toward Bottom-Front-Left, between the axes. On the axes Top
+(-2.19 dBi) is higher than Bottom (-3.66 dBi), but averaged over each half Bottom (-1.99 dBi) is
+stronger than Top (-3.74 dBi), which agrees with the peak. Across 2400 to 2500 MHz the front half
+averages 4.7 dB above the rear at 2400 MHz, falling to 2.0 dB at 2500 MHz; the bottom half averages
+1.4 to 1.75 dB above the top; and Right and Left stay within 0.3 dB of each other, so the larger
+on-axis difference between them reflects the shape of the pattern in those two directions, not a
+stronger side.
 
 ## Usage
 
@@ -122,6 +202,9 @@ python scripts/plot_patterns.py data/01_pattern --plane XY XZ YZ --save-dir outp
 
 # Same, smoothed with a 20 degree window
 python scripts/plot_patterns.py data/01_pattern --plane XY XZ YZ --smooth 20 --save-dir output
+
+# Gain table (no plots): peak, gain toward and averaged over each side, side-to-side differences, efficiency
+python scripts/tabulate_patterns.py data/01_pattern
 ```
 
 Saved filenames look like `01_db.png`, `01_smith.png` and `2450MHz_XY_polar.png`
@@ -223,6 +306,59 @@ options:
   --save-dir SAVE_DIR   save PNGs here instead of showing
 ```
 
+### `tabulate_patterns.py --help`
+
+```text
+usage: tabulate_patterns.py [-h] [-o OUTPUT] inputs [inputs ...]
+
+Tabulate radiation-pattern gains into a CSV file (no plots), one row per frequency.
+
+For each pattern file it records the peak total (H+V) gain with the theta and phi where it
+occurs and which side of the device that is, and the total gain toward each side of the device.
+
+    python scripts/tabulate_patterns.py data/01_pattern
+    python scripts/tabulate_patterns.py data/01_pattern --output output/sample1.csv
+    python scripts/tabulate_patterns.py "data/01_pattern/01-24[45]*.csv"
+
+Sides of the device (set in ORIENTATION in antenna/models.py; Right and Left are as seen from
+the front):
+    Front = -Y   Rear = +Y   Right = +X   Left = -X   Top = +Z   Bottom = -Z
+Theta is measured from +Z and phi from +X toward +Y, so for example Right is (theta 90, phi 0)
+and Front is (theta 90, phi 270).
+
+The peak direction is named from theta (Top above the horizon, Bottom below) and the quadrant
+of phi, for example "Bottom-Front-Left". A peak within 22.5 degrees of an axis is named by that
+side alone ("Front", "Top"), and near the horizon no Top/Bottom word is used.
+
+Gains are in dBi. The on-axis columns (Front(-Y)_gain_dBi, ...) are the gain measured exactly
+toward each side: Front, Rear, Right and Left are measured grid points. At the poles (Top,
+Bottom) the measured gain varies with phi, so those two are the power average over all phi; the
+terminal output says how large that variation is. The peak is the highest measured grid point;
+if it falls at a pole, phi is reported as the first grid value.
+
+The half-sphere columns (Front(-Y)_half_avg_dBi, ...) are the average gain over the half of the
+sphere facing each side, to show which side radiates more overall, not just along one line. The
+average is taken in linear power, with each measured point weighted by the area it covers on
+the sphere (sin theta); points on the dividing circle count half in each half.
+
+Summary numbers: Front_minus_Rear_dB, Right_minus_Left_dB and Top_minus_Bottom_dB are the
+half-sphere average of the first side minus that of the second, so a positive value means the
+first side is stronger. efficiency_from_gain_pct is 100 times the average of the linear gain over
+the whole sphere. That equals the antenna efficiency (radiated power / input power) when the gain
+is absolute, meaning referenced to the power fed to the antenna, as chamber gain normally is. It
+can differ from an efficiency a vendor reports, depending on how that is defined and measured.
+
+Files may be given as paths, directories (all *.csv directly inside) or glob patterns. The
+frequency is read from the filename (e.g. 01-2400.000000MHz.csv).
+
+positional arguments:
+  inputs               pattern CSV files, directories or globs
+
+options:
+  -h, --help           show this help message and exit
+  -o, --output OUTPUT  CSV file to write (default: output/<folder name>_summary.csv)
+```
+
 ## Performance
 
 Plotting itself takes a second or two per figure; most of the wait is Python loading numpy,
@@ -244,6 +380,12 @@ The tests build small synthetic `.s1p` and pattern files, so they do not depend 
 
 ## Open items
 
+- **Efficiency vs. the vendor report:** `efficiency_from_gain_pct` for the sample data is 47 to 54%
+  across 2400-2500 MHz, while the vendor report (Peak Gain & Efficiency table) lists 56 to 64%. The
+  ratio is 0.83 to 0.87 at all 11 frequencies, a roughly constant 0.6 to 0.8 dB, and the two follow
+  the same shape across the band. Mismatch loss (about 0.04 dB at 2450 MHz and 0.2 dB at 2400 MHz
+  from the report's return loss) and the 0.13 dB cable loss are too small to explain it. The cause
+  has not been identified; it may be how the vendor defines or measures efficiency, so ask them.
 - **`L` and `S` tables:** it is not yet confirmed what these represent (possibly circular
   polarizations), so they are excluded from plots by default. Add them with `--pols T H V L S`.
 - **H/V labeling vs. the vendor report:** the `GainH` and `GainV` tables are plotted exactly as

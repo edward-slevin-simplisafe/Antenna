@@ -409,3 +409,275 @@ def test_polar_ticks_every_10_degrees_and_larger_text(pattern):
     assert ax.get_xticklabels()[0].get_fontsize() == TICK_FONTSIZE
     assert ax.get_legend().get_texts()[0].get_fontsize() == LEGEND_FONTSIZE
     assert min(TICK_FONTSIZE, POLAR_TICK_FONTSIZE, LABEL_FONTSIZE, LEGEND_FONTSIZE) > 10  # was default
+
+
+# ---- gain tables ------------------------------------------------------------------
+
+def _pole_pattern(pole_row):
+    """T table: theta 0 / 90 / 180 rows on a 90-degree phi grid; the +Z pole varies with phi."""
+    import numpy as np
+    from antenna.models import Pattern
+    gain = np.array([pole_row, [2, 3, 4, 5, 2], [0, 0, 0, 0, 0]], dtype=float)
+    return Pattern(freq_hz=2.45e9, theta_deg=np.array([0.0, 90, 180]),
+                   phi_deg=np.array([0.0, 90, 180, 270, 360]), gain_db={"T": gain}, name="p")
+
+
+def test_gain_at_grid_points_and_poles(pattern):
+    assert analysis.gain_at(pattern, "T", 90, 180) == 4  # a measured grid point
+    assert analysis.gain_at(pattern, "T", 90, 45) == pytest.approx(2.5)  # between grid points
+    assert analysis.gain_at(pattern, "T", 0, None) == pytest.approx(1.0)  # constant pole row
+    with pytest.raises(ValueError, match="outside the measured range"):
+        analysis.gain_at(pattern, "T", 200, 0)
+
+
+def test_pole_gain_is_power_average_over_phi():
+    import numpy as np
+    p = _pole_pattern([1, 3, 1, 3, 1])  # phi=360 repeats phi=0
+    expected = 10 * np.log10(np.mean(10 ** (np.array([1, 3, 1, 3]) / 10)))
+    assert analysis.gain_at(p, "T", 0, None) == pytest.approx(expected)
+    assert analysis.phi_spread_db(p, "T", 0) == pytest.approx(2.0)
+    assert analysis.phi_spread_db(p, "T", 180) == 0
+
+
+def test_summary_row_values(pattern):
+    from antenna.tables import COLUMNS, summary_row
+    row = summary_row(pattern)
+    assert (row["peak_gain_dBi"], row["peak_theta_deg"], row["peak_phi_deg"]) == (5, 90, 270)
+    assert row["peak_direction"] == "Front"  # theta 90, phi 270 is -Y
+    assert (row["Right(+X)_gain_dBi"], row["Left(-X)_gain_dBi"]) == (2, 4)  # theta 90, phi 0 / 180
+    assert (row["Rear(+Y)_gain_dBi"], row["Front(-Y)_gain_dBi"]) == (3, 5)  # phi 90 / 270
+    assert row["Top(+Z)_gain_dBi"] == pytest.approx(1.0)
+    assert row["Bottom(-Z)_gain_dBi"] == pytest.approx(0.0)
+    assert row["freq_MHz"] == pytest.approx(2400)
+    assert all(c in row for c in COLUMNS)
+
+
+def test_summary_needs_total_table(pattern):
+    from antenna.tables import summary_row
+    del pattern.gain_db["T"]
+    with pytest.raises(ValueError, match="no GainT table"):
+        summary_row(pattern)
+
+
+def test_pole_note_only_when_variation_is_noticeable(pattern):
+    from antenna.tables import pole_note, summary_row
+    assert pole_note([summary_row(pattern)]) is None  # constant poles: nothing to say
+    note = pole_note([summary_row(_pole_pattern([1, 3, 1, 3, 1]))])
+    assert "2.0 dB" in note and "power average" in note
+
+
+def test_csv_and_terminal_table(tmp_path, pattern):
+    import csv
+    from antenna.tables import COLUMNS, format_table, summary_rows, write_csv
+    rows = summary_rows([pattern])
+    out = write_csv(rows, tmp_path / "sub" / "summary.csv")  # creates the folder
+    lines = list(csv.reader(open(out, newline="")))
+    assert lines[0] == COLUMNS
+    assert lines[0][0] == "freq_MHz" and not any(c[0] in "+-" for c in lines[0])  # Excel-safe
+    assert lines[0][4] == "peak_direction"
+    assert lines[0][5:11] == ["Front(-Y)_gain_dBi", "Rear(+Y)_gain_dBi", "Right(+X)_gain_dBi",
+                              "Left(-X)_gain_dBi", "Top(+Z)_gain_dBi", "Bottom(-Z)_gain_dBi"]
+    # Front, Rear, Right, Left, Top, Bottom
+    assert lines[1][:11] == ["2400", "5.00", "90", "270", "Front", "5.00", "3.00", "2.00", "4.00",
+                             "1.00", "0.00"]
+    assert lines[0][11:17] == ["Front(-Y)_half_avg_dBi", "Rear(+Y)_half_avg_dBi",
+                               "Right(+X)_half_avg_dBi", "Left(-X)_half_avg_dBi",
+                               "Top(+Z)_half_avg_dBi", "Bottom(-Z)_half_avg_dBi"]
+    expected = [f"{analysis.hemisphere_gain(pattern, 'T', axis):.2f}"
+                for axis in ("Y-", "Y+", "X+", "X-", "Z+", "Z-")]
+    assert lines[1][11:17] == expected and len(lines[1]) == len(COLUMNS)
+    assert lines[0][17:] == ["Front_minus_Rear_dB", "Right_minus_Left_dB", "Top_minus_Bottom_dB",
+                             "efficiency_from_gain_pct"]
+    assert "MHz" in format_table(rows).splitlines()[0]
+
+
+# ---- device orientation labels -------------------------------------------------------
+
+@pytest.mark.parametrize("theta, phi, expected", [
+    (135, 240, "Bottom-Front-Left"),  # the sample data's peak
+    (135, 225, "Bottom-Front-Left"),  # exactly between -X and -Y: the quadrant decides
+    (45, 45, "Top-Rear-Right"),
+    (45, 135, "Top-Rear-Left"),
+    (90, 270, "Front"), (90, 90, "Rear"), (90, 0, "Right"), (90, 180, "Left"),
+    (90, 360, "Right"),  # phi wraps
+    (90, 100, "Rear"),  # within 22.5 deg of +Y, on the horizon: one side, no Top/Bottom word
+    (100, 300, "Front-Right"),  # on the horizon but between axes
+    (60, 350, "Top-Right"),  # near +X: one horizontal side plus Top
+    (0, 123, "Top"), (10, 45, "Top"), (180, 0, "Bottom"), (170, 200, "Bottom"),
+    (22.5, 90, "Top"),  # the tolerance is inclusive
+])
+def test_direction_label(theta, phi, expected):
+    assert analysis.direction_label(theta, phi) == expected
+
+
+def test_direction_label_follows_orientation_and_checks_range():
+    turned = {"Front": "X+", "Rear": "X-", "Right": "Y+", "Left": "Y-", "Top": "Z+", "Bottom": "Z-"}
+    assert analysis.direction_label(90, 0, turned) == "Front"
+    assert analysis.direction_label(135, 45, turned) == "Bottom-Right-Front"  # Y-axis side first
+    with pytest.raises(ValueError, match="theta"):
+        analysis.direction_label(200, 0)
+
+
+def test_orientation_is_complete_and_matches_the_requested_sides():
+    from antenna.models import DIRECTIONS, ORIENTATION
+    assert sorted(ORIENTATION.values()) == sorted(DIRECTIONS)  # each axis direction used once
+    assert list(ORIENTATION) == ["Front", "Rear", "Right", "Left", "Top", "Bottom"]
+    assert ORIENTATION == {"Front": "Y-", "Rear": "Y+", "Right": "X+", "Left": "X-",
+                           "Top": "Z+", "Bottom": "Z-"}
+
+
+def test_peak_direction_at_a_pole_and_pole_spread_uses_labels():
+    from antenna.tables import POLE_LABELS, summary_row
+    import numpy as np
+    from antenna.models import Pattern
+    gain = np.array([[9.0, 9, 9, 9, 9], [2, 3, 4, 5, 2], [0, 0, 0, 0, 0]])
+    p = Pattern(freq_hz=2.45e9, theta_deg=np.array([0.0, 90, 180]),
+                phi_deg=np.array([0.0, 90, 180, 270, 360]), gain_db={"T": gain}, name="p")
+    row = summary_row(p)
+    assert row["peak_direction"] == "Top"
+    assert POLE_LABELS == ["Top", "Bottom"]
+    assert "Top_phi_spread_dB" in row and "Bottom_phi_spread_dB" in row
+
+
+def test_orientation_note_and_terminal_header():
+    from antenna.tables import orientation_note
+    assert orientation_note().startswith("Sides: Front = -Y, Rear = +Y, Right = +X, Left = -X")
+    assert "Top = +Z, Bottom = -Z" in orientation_note()
+
+
+def test_terminal_table_has_labels_axes_and_left_aligned_direction(pattern):
+    from antenna.tables import format_table, pole_note, summary_rows
+    head1, head2, first = format_table(summary_rows([pattern])).splitlines()
+    for label in ("Front", "Rear", "Right", "Left", "Top", "Bottom", "Peak direction"):
+        assert label in head1
+    for axis in ("(-Y)", "(+Y)", "(+X)", "(-X)", "(+Z)", "(-Z)"):
+        assert axis in head2
+    assert head1.index("Peak direction") == first.index("Front")  # left-aligned under its header
+    note = pole_note(summary_rows([_pole_pattern([1, 3, 1, 3, 1])]))
+    assert "Top and Bottom" in note and "(+Z" not in note
+
+
+# ---- half-sphere average gain ---------------------------------------------------------
+
+def _grid_pattern(theta, phi, gain):
+    import numpy as np
+    from antenna.models import Pattern
+    return Pattern(freq_hz=2.45e9, theta_deg=np.array(theta, dtype=float),
+                   phi_deg=np.array(phi, dtype=float), gain_db={"T": np.array(gain, dtype=float)},
+                   name="p")
+
+
+def test_hemisphere_gain_of_a_constant_pattern_is_that_constant():
+    p = _grid_pattern([0, 45, 90, 135, 180], [0, 90, 180, 270, 360], [[3.0] * 5] * 5)
+    for axis in ("X+", "X-", "Y+", "Y-", "Z+", "Z-"):
+        assert analysis.hemisphere_gain(p, "T", axis) == pytest.approx(3.0)
+
+
+def test_hemisphere_gain_top_bottom_uses_sin_weights_power_average_and_half_equator():
+    import numpy as np
+    # 10 dB on the top rows, 0 dB elsewhere; the equator row (theta 90) is 0 dB, counted half
+    # in each hemisphere. Constant in phi, so only the theta weights matter (theta=0 has weight 0).
+    rows = [[10.0] * 5, [10.0] * 5, [0.0] * 5, [0.0] * 5, [0.0] * 5]
+    p = _grid_pattern([0, 45, 90, 135, 180], [0, 90, 180, 270, 360], rows)
+    s45 = np.sin(np.deg2rad(45))
+    top = 10 * np.log10((10 * s45 + 1 * 0.5) / (s45 + 0.5))
+    assert analysis.hemisphere_gain(p, "T", "Z+") == pytest.approx(top)
+    assert analysis.hemisphere_gain(p, "T", "Z-") == pytest.approx(0.0)  # only 0 dB points
+    assert top > 10 * s45 / (s45 + 0.5)  # a plain average of the dB values would come out lower
+
+
+def test_hemisphere_gain_left_right_and_front_rear_boundaries_count_half():
+    import numpy as np
+    # Gain depends on phi only: 10 dB at phi = 0 and its closing copy 360, else 0 dB.
+    row = [10.0, 0, 0, 0, 10.0]
+    p = _grid_pattern([0, 45, 90, 135, 180], [0, 90, 180, 270, 360], [row] * 5)
+    assert analysis.hemisphere_gain(p, "T", "X+") == pytest.approx(10 * np.log10(5.5))
+    assert analysis.hemisphere_gain(p, "T", "X-") == pytest.approx(0.0)
+    third = 10 * np.log10(3.25)  # +Y and -Y each contain half of the phi=0/360 and phi=180 columns
+    assert analysis.hemisphere_gain(p, "T", "Y+") == pytest.approx(third)
+    assert analysis.hemisphere_gain(p, "T", "Y-") == pytest.approx(third)
+
+
+def test_hemisphere_gain_checks_inputs():
+    p = _grid_pattern([0, 90, 180], [0, 90, 180, 270, 360], [[0.0] * 5] * 3)
+    with pytest.raises(ValueError, match="axis"):
+        analysis.hemisphere_gain(p, "T", "W+")
+    with pytest.raises(ValueError, match="axis"):
+        analysis.hemisphere_gain(p, "T", "Front")
+    partial = _grid_pattern([0, 90], [0, 90, 180, 270, 360], [[0.0] * 5] * 2)
+    with pytest.raises(ValueError, match="full-sphere"):
+        analysis.hemisphere_gain(partial, "T", "Z+")
+    half_turn = _grid_pattern([0, 90, 180], [0, 90, 180], [[0.0] * 3] * 3)
+    with pytest.raises(ValueError, match="full-sphere"):
+        analysis.hemisphere_gain(half_turn, "T", "Z+")
+
+
+def test_half_sphere_terminal_table(pattern):
+    from antenna.tables import format_half_table, summary_rows
+    head1, head2, first = format_half_table(summary_rows([pattern])).splitlines()
+    for label in ("MHz", "Front", "Rear", "Right", "Left", "Top", "Bottom"):
+        assert label in head1
+    for axis in ("(-Y)", "(+Y)", "(+X)", "(-X)", "(+Z)", "(-Z)"):
+        assert axis in head2
+    assert "Peak" not in head1  # only the half-sphere columns
+    assert len(first.split()) == 7  # frequency plus six sides
+
+
+# ---- summary numbers and efficiency ------------------------------------------------------
+
+def test_mean_gain_linear_constant_and_consistency(pattern):
+    import numpy as np
+    const = _grid_pattern([0, 45, 90, 135, 180], [0, 90, 180, 270, 360], [[3.0] * 5] * 5)
+    assert analysis.mean_gain_linear(const, "T") == pytest.approx(10 ** 0.3)
+    # the whole sphere is the two halves of equal solid angle, so its mean is their average
+    halves = [10 ** (analysis.hemisphere_gain(pattern, "T", a) / 10) for a in ("Z+", "Z-")]
+    assert analysis.mean_gain_linear(pattern, "T") == pytest.approx(np.mean(halves))
+    for axis_pair in (("X+", "X-"), ("Y+", "Y-")):
+        halves = [10 ** (analysis.hemisphere_gain(pattern, "T", a) / 10) for a in axis_pair]
+        assert analysis.mean_gain_linear(pattern, "T") == pytest.approx(np.mean(halves))
+
+
+def test_mean_gain_needs_a_full_sphere():
+    partial = _grid_pattern([0, 90], [0, 90, 180, 270, 360], [[0.0] * 5] * 2)
+    with pytest.raises(ValueError, match="whole-sphere average needs a full-sphere"):
+        analysis.mean_gain_linear(partial, "T")
+
+
+def test_summary_row_differences_and_efficiency(pattern):
+    from antenna.tables import DIFF_COLUMNS, EFFICIENCY_COLUMN, HALF_COLUMNS, summary_row
+    row = summary_row(pattern)
+    for (a, b), column in DIFF_COLUMNS.items():
+        assert row[column] == pytest.approx(row[HALF_COLUMNS[a]] - row[HALF_COLUMNS[b]])
+    assert list(DIFF_COLUMNS.values()) == ["Front_minus_Rear_dB", "Right_minus_Left_dB",
+                                           "Top_minus_Bottom_dB"]
+    assert row[EFFICIENCY_COLUMN] == pytest.approx(100 * analysis.mean_gain_linear(pattern, "T"))
+
+
+def test_opposite_sides_really_are_opposite_axes():
+    from antenna.models import OPPOSITE_SIDES, ORIENTATION
+    used = [side for pair in OPPOSITE_SIDES for side in pair]
+    assert sorted(used) == sorted(ORIENTATION)  # every side appears exactly once
+    for first, second in OPPOSITE_SIDES:
+        a, b = ORIENTATION[first], ORIENTATION[second]
+        assert a[0] == b[0] and a[1] != b[1]  # same axis letter, opposite sign
+
+
+def test_summary_note_warns_about_efficiency_above_100_percent():
+    from antenna.tables import summary_note, summary_rows
+    grid = ([0, 45, 90, 135, 180], [0, 90, 180, 270, 360])
+    high = summary_rows([_grid_pattern(*grid, [[3.0] * 5] * 5)])   # +3 dBi everywhere: 199.5%
+    low = summary_rows([_grid_pattern(*grid, [[-3.0] * 5] * 5)])   # -3 dBi everywhere: 50.1%
+    assert high[0]["efficiency_from_gain_pct"] == pytest.approx(199.53, abs=0.01)
+    assert low[0]["efficiency_from_gain_pct"] == pytest.approx(50.12, abs=0.01)
+    assert "WARNING" in summary_note(high) and "not physical" in summary_note(high)
+    assert "WARNING" not in summary_note(low)
+    assert "positive = the first side is stronger" in summary_note(low)
+
+
+def test_summary_terminal_table(pattern):
+    from antenna.tables import format_summary_table, summary_rows
+    head1, head2, first = format_summary_table(summary_rows([pattern])).splitlines()
+    for label in ("MHz", "Front-Rear", "Right-Left", "Top-Bottom", "Efficiency"):
+        assert label in head1
+    assert head2.split() == ["dB", "dB", "dB", "%"]
+    assert len(first.split()) == 5  # frequency, three differences, efficiency

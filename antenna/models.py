@@ -48,6 +48,40 @@ PLANES = {
 }
 
 
+# Major directions -> (theta, phi) in degrees, in the same frame as PLANES. At the poles
+# (Z+ and Z-) phi has no geometric meaning, so it is None: the gain there is the power average
+# over all phi. (The measured gain at a pole does vary with phi, by up to ~3 dB in the sample
+# data, so no single phi column is the "right" one.)
+DIRECTIONS = {
+    "X+": (90.0, 0.0),
+    "X-": (90.0, 180.0),
+    "Y+": (90.0, 90.0),
+    "Y-": (90.0, 270.0),
+    "Z+": (0.0, None),
+    "Z-": (180.0, None),
+}
+
+# Device orientation: which side of the product faces each axis direction, as label -> a
+# DIRECTIONS key. Right and Left are as seen from the front. The order here is the column order
+# of the gain table. Edit this if the measurement orientation changes; the table headers and the
+# peak-direction wording follow.
+ORIENTATION = {
+    "Front": "Y-",
+    "Rear": "Y+",
+    "Right": "X+",
+    "Left": "X-",
+    "Top": "Z+",
+    "Bottom": "Z-",
+}
+
+# Pairs of opposite sides compared in the gain table; each difference is (first - second) in dB.
+OPPOSITE_SIDES = (("Front", "Rear"), ("Right", "Left"), ("Top", "Bottom"))
+
+# A direction within this many degrees of an axis is named by that axis alone (see
+# analysis.direction_label): near a pole just Top/Bottom, near the horizon no Top/Bottom word.
+DIRECTION_TOLERANCE_DEG = 22.5
+
+
 def plane_name(cut: str, value_deg: float) -> str | None:
     """'XY'/'XZ'/'YZ' if (cut, value) is a principal plane, else None."""
     for name, (c, v) in PLANES.items():

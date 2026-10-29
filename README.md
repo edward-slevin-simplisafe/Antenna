@@ -10,14 +10,28 @@ Python tools for plotting and analyzing antenna measurements:
 
 Requires Python 3.10+ (developed on 3.14, Windows).
 
+Create the virtual environment in a **local** folder, outside the repository, then install the
+project into it from the repository root (the folder containing `pyproject.toml`):
+
 ```powershell
-python -m venv antenna.venv
-.\antenna.venv\Scripts\Activate.ps1
+python -m venv C:\venvs\antenna
+C:\venvs\antenna\Scripts\Activate.ps1
+cd <path to this repository>
 pip install -e ".[dev]"
 ```
 
-The editable install (`-e`) makes `import antenna` work from anywhere, including the scripts.
-Dependencies are numpy, scipy, matplotlib and scikit-rf; `[dev]` adds pytest.
+Activating the environment (the second line) makes `python` and `pip` in that terminal use it;
+the prompt then starts with `(antenna)`. Activate it again in each new terminal, or in VS Code
+choose **Python: Select Interpreter** and enter `C:\venvs\antenna\Scripts\python.exe` so new
+terminals activate it automatically.
+
+The editable install (`-e`) makes `import antenna` work from anywhere, including the scripts, and
+code changes take effect without reinstalling. Dependencies are numpy, scipy, matplotlib and
+scikit-rf; `[dev]` adds pytest.
+
+Keep the environment off Google Drive and other synced or network folders: thousands of small
+files there make Python start very slowly (see [Performance](#performance)). If you work on another
+machine, create a separate environment there; environments are not portable between machines.
 
 ## How the code is organized
 
@@ -201,14 +215,9 @@ options:
 Plotting itself takes a second or two per figure; most of the wait is Python loading numpy,
 scipy and matplotlib at startup. If the virtual environment lives in a Google Drive (or other
 synced or network) folder, those loads can take 30 seconds or more, versus a fraction of a second
-from a local disk. The scripts print how long loading took and suggest this fix when it is slow:
-create the environment in a local folder instead, then install the project into it.
-
-```powershell
-python -m venv C:\venvs\antenna
-C:\venvs\antenna\Scripts\Activate.ps1
-pip install -e ".[dev]"      # run from the repository root
-```
+from a local disk. The scripts print how long loading took and suggest the fix when it is slow:
+recreate the environment in a local folder as described in [Setup](#setup). The project itself can
+stay on Drive; only the environment needs to be local.
 
 `--help` and path errors are reported before any heavy library is loaded, so they return immediately.
 

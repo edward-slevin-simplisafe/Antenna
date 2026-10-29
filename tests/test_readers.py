@@ -343,3 +343,69 @@ def test_traces_are_thick(pattern):
         widths = [ln.get_linewidth() for ln in ax.get_lines() if ln.get_label() in ("H+V", "H")]
         assert widths == [TRACE_LINEWIDTH] * 2
     assert TRACE_LINEWIDTH >= 2.5
+
+
+# ---- S11 band shading / y limits / pattern text sizes --------------------------------
+
+def _s11_series(tmp_path):
+    f = tmp_path / "a.s1p"
+    f.write_text("# MHz S RI R 50\n" + "".join(f"{m} {0.05 + 0.1 * abs(m - 2450) / 1000:g} 0\n"
+                                               for m in range(2000, 3001, 25)))
+    return [read_s1p(f)]
+
+
+def test_s11_shades_wifi_band_with_legend_entry(tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    from antenna.models import WIFI_24_BAND_LABEL, WIFI_24_BAND_MHZ
+    from antenna.plotting import make_s11_figure
+
+    ax = make_s11_figure(_s11_series(tmp_path)).axes[0]
+    (span,) = ax.patches  # exactly one shaded region: the Wi-Fi band, not where S11 crosses -10 dB
+    assert (span.get_x(), span.get_x() + span.get_width()) == pytest.approx(WIFI_24_BAND_MHZ)
+    assert WIFI_24_BAND_LABEL in [t.get_text() for t in ax.get_legend().get_texts()]
+
+
+def test_s11_custom_and_disabled_band(tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    from antenna.plotting import make_s11_figure
+
+    series = _s11_series(tmp_path)
+    ax = make_s11_figure(series, band_mhz=(2412, 2472)).axes[0]
+    assert "2412-2472 MHz band" in [t.get_text() for t in ax.get_legend().get_texts()]
+    assert len(make_s11_figure(series, band_mhz=None).axes[0].patches) == 0
+
+
+def test_s11_y_limits(tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    from antenna.plotting import make_s11_figure
+
+    series = _s11_series(tmp_path)
+    assert make_s11_figure(series, ymin=-25, ymax=0).axes[0].get_ylim() == (-25, 0)
+    assert make_s11_figure(series, ymax=3).axes[0].get_ylim()[1] == 3  # bottom stays automatic
+    with pytest.raises(ValueError, match="below ymax"):
+        make_s11_figure(series, ymin=50)
+
+
+def test_polar_ticks_every_10_degrees_and_larger_text(pattern):
+    import matplotlib
+    matplotlib.use("Agg")
+    from antenna.plotting import (LABEL_FONTSIZE, LEGEND_FONTSIZE, POLAR_TICK_FONTSIZE,
+                                  TICK_FONTSIZE, TITLE_FONTSIZE, make_cut_figure)
+
+    polar = make_cut_figure(pattern, "phi", 0, "polar")
+    ax = polar.axes[0]
+    assert len(ax.get_xticks()) == 36  # 0, 10, ..., 350
+    assert ax.get_xticklabels()[0].get_fontsize() == POLAR_TICK_FONTSIZE
+    assert ax.title.get_fontsize() == TITLE_FONTSIZE
+    assert polar.legends[0].get_texts()[0].get_fontsize() == LEGEND_FONTSIZE
+
+    rect = make_cut_figure(pattern, "phi", 0, "rect")
+    ax = rect.axes[0]
+    assert ax.get_xlabel() and ax.xaxis.label.get_fontsize() == LABEL_FONTSIZE
+    assert ax.yaxis.label.get_fontsize() == LABEL_FONTSIZE
+    assert ax.get_xticklabels()[0].get_fontsize() == TICK_FONTSIZE
+    assert ax.get_legend().get_texts()[0].get_fontsize() == LEGEND_FONTSIZE
+    assert min(TICK_FONTSIZE, POLAR_TICK_FONTSIZE, LABEL_FONTSIZE, LEGEND_FONTSIZE) > 10  # was default

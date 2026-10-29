@@ -8,21 +8,30 @@ import numpy as np
 
 from antenna import analysis
 from antenna.models import (DEFAULT_POLS, GAIN_LIMIT_DB, POL_COLORS, POL_LABELS, Pattern,
-                            S11Data, plane_name)
+                            S11Data, WIFI_24_BAND_LABEL, WIFI_24_BAND_MHZ, plane_name)
 
 
 # ---- S11 -------------------------------------------------------------------
 
 def plot_s11(ax, series: list[S11Data], threshold_db: float | None = -10.0,
-             mark_mhz: list[float] | None = None, shade_bands: bool = True):
-    """Overlay |S11| (dB) vs frequency (MHz) for one or more measurements."""
+             mark_mhz: list[float] | None = None,
+             band_mhz: tuple[float, float] | None = WIFI_24_BAND_MHZ,
+             ymin: float | None = None, ymax: float | None = None):
+    """Overlay |S11| (dB) vs frequency (MHz) for one or more measurements.
+
+    band_mhz: (low, high) frequency range to shade, default the 2.4 GHz Wi-Fi band (CH 1-13);
+              None for no shading.
+    ymin, ymax: dB axis limits; either one may be omitted to keep the automatic limit.
+    """
+    if band_mhz is not None:
+        lo, hi = band_mhz
+        is_wifi = (float(lo), float(hi)) == WIFI_24_BAND_MHZ
+        ax.axvspan(lo, hi, color="0.5", alpha=0.15, lw=0,
+                   label=WIFI_24_BAND_LABEL if is_wifi else f"{lo:g}-{hi:g} MHz band")
     for k, data in enumerate(series):
         f_mhz = data.freq_hz / 1e6
         y = analysis.s11_db(data.s11)
         (line,) = ax.plot(f_mhz, y, label=data.name or f"S11 {k + 1}")
-        if threshold_db is not None and shade_bands:
-            for lo, hi in analysis.bands_below(f_mhz, y, threshold_db):
-                ax.axvspan(lo, hi, color=line.get_color(), alpha=0.08)
         marks = sorted(mark_mhz or [])
         for i, fm in enumerate(marks):
             val = float(np.interp(fm, f_mhz, y))
@@ -44,6 +53,11 @@ def plot_s11(ax, series: list[S11Data], threshold_db: float | None = -10.0,
     ax.set_xlabel("Frequency (MHz)")
     ax.set_ylabel("S11 (dB)")
     ax.grid(True, alpha=0.3)
+    if ymin is not None or ymax is not None:
+        ax.set_ylim(bottom=ymin, top=ymax)
+        bottom, top = ax.get_ylim()
+        if bottom >= top:
+            raise ValueError(f"ymin ({bottom:g} dB) must be below ymax ({top:g} dB)")
     ax.legend()
 
 
@@ -94,6 +108,16 @@ def make_smith_figure(series: list[S11Data], **kwargs):
 
 TRACE_LINEWIDTH = 2.5  # pattern traces (matplotlib's default is 1.5)
 
+# Text sizes in points for the pattern plots (matplotlib's default is 10).
+TICK_FONTSIZE = 13
+LABEL_FONTSIZE = 14
+LEGEND_FONTSIZE = 14
+TITLE_FONTSIZE = 16
+
+POLAR_TICK_STEP_DEG = 10  # angle grid lines and labels on polar plots
+POLAR_TICK_FONTSIZE = 12  # a little smaller than TICK_FONTSIZE so 36 angle labels don't collide
+POLAR_FIGSIZE = (9, 8)  # inches; larger so the 10 degree labels have room
+
 
 def _limits(gains: dict[str, np.ndarray], dynamic_range_db: float,
             rmin: float | None = None, rmax: float | None = None):
@@ -133,6 +157,8 @@ def plot_cut_polar(ax, angle_deg: np.ndarray, gains: dict[str, np.ndarray],
         ax.set_theta_zero_location("N")
         ax.set_theta_direction(-1)
     ax.set_rlim(rmin, rmax)
+    ax.set_thetagrids(np.arange(0, 360, POLAR_TICK_STEP_DEG))
+    ax.tick_params(labelsize=POLAR_TICK_FONTSIZE)
     ax.set_rlabel_position(22.5)
     ax.grid(True, alpha=0.4)
 
@@ -153,8 +179,9 @@ def plot_cut_rect(ax, angle_deg: np.ndarray, gains: dict[str, np.ndarray], xlabe
     ax.set_xlim(angle_deg.min(), angle_deg.max())
     ax.set_ylim(rmin, rmax)
     ax.set_xticks(np.arange(math.ceil(angle_deg.min() / 30) * 30, angle_deg.max() + 1, 30))
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel("Gain (dB)")
+    ax.set_xlabel(xlabel, fontsize=LABEL_FONTSIZE)
+    ax.set_ylabel("Gain (dB)", fontsize=LABEL_FONTSIZE)
+    ax.tick_params(labelsize=TICK_FONTSIZE)
     ax.grid(True, alpha=0.3)
 
 
@@ -194,16 +221,17 @@ def make_cut_figure(pattern: Pattern, cut: str, value_deg: float, kind: str = "p
     applied_deg = analysis.effective_window_deg(step, smooth_deg)
 
     if kind == "polar":
-        fig, ax = plt.subplots(subplot_kw={"projection": "polar"}, figsize=(7, 6.5),
+        fig, ax = plt.subplots(subplot_kw={"projection": "polar"}, figsize=POLAR_FIGSIZE,
                                constrained_layout=True)
         plot_cut_polar(ax, angle, gains, dynamic_range_db, colors, top_down=(cut == "theta"),
                        rmin=rmin, rmax=rmax)
-        ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
+        fig.legend(*ax.get_legend_handles_labels(), loc="outside upper right",
+                   fontsize=LEGEND_FONTSIZE)
     elif kind == "rect":
         fig, ax = plt.subplots(figsize=(9, 5), constrained_layout=True)
         plot_cut_rect(ax, angle, gains, "Theta (deg)" if cut == "phi" else "Phi (deg)",
                       dynamic_range_db, colors, gain_limit_db, rmin, rmax)
-        ax.legend()
+        ax.legend(fontsize=LEGEND_FONTSIZE)
     else:
         raise ValueError("kind must be 'polar' or 'rect'")
 
@@ -211,5 +239,6 @@ def make_cut_figure(pattern: Pattern, cut: str, value_deg: float, kind: str = "p
     smooth_note = f"   ({applied_deg:g}° smoothing window)" if applied_deg else ""
     plane = plane_name(cut, value_deg)
     what = f"{plane} plane ({sym} = {fixed:g}°)" if plane else f"{sym} = {fixed:g}° cut"
-    ax.set_title(f"{pattern.freq_hz / 1e6:g} MHz   {what}{smooth_note}")
+    ax.set_title(f"{pattern.freq_hz / 1e6:g} MHz   {what}{smooth_note}",
+                 fontsize=TITLE_FONTSIZE, pad=18 if kind == "polar" else 6)
     return fig

@@ -34,6 +34,11 @@ GAIN_LIMIT_DB = 4.0
 # rounded to whole MHz. The allocation is 2400-2483.5 MHz (center 2441.75 MHz; channel 7 is 2442).
 WIFI_24_MARKS_MHZ = (2400.0, 2442.0, 2483.0)
 
+# Region shaded on the S11 dB plot: the 2.4 GHz Wi-Fi band covering channels 1-13
+# (channel 1 is centered at 2412 MHz, channel 13 at 2472 MHz and ends at ~2483 MHz).
+WIFI_24_BAND_MHZ = (2400.0, 2483.5)
+WIFI_24_BAND_LABEL = "2.4 GHz Wi-Fi band (CH 1-13)"
+
 # Principal planes -> (cut, fixed angle in degrees). Theta is measured from +Z, phi from +X
 # toward +Y, so XY is the theta=90 conical cut, XZ is phi=0 and YZ is phi=90.
 PLANES = {

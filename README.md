@@ -98,6 +98,11 @@ tables are read but not plotted by default (see Open items).
   `--rmax` puts the bottom `--range` below it; a lone `--rmin` keeps the top automatic.
 - **Gain limit:** a dashed 4 dB line is drawn on rectangular plots (`--gain-limit`, `--no-gain-limit`).
 - **S11 markers** default to the 2.4 GHz Wi-Fi band edges and center: 2400, 2442 and 2483 MHz.
+- **S11 shading:** the dB plot shades the 2.4 GHz Wi-Fi band covering channels 1-13
+  (2400-2483.5 MHz) and lists it in the legend; `--band LOW HIGH` or `--no-band` changes it.
+  `--ymin` and `--ymax` set the dB axis limits (either may be given alone).
+- **Pattern text and ticks:** axis labels, tick labels, legends and titles are larger than the
+  matplotlib default, and polar plots have a grid line and label every 10 degrees.
 - **Smoothing** (`--smooth`) is a sliding window across angle, averaged in linear power and wrapped
   around the seam. The window is rounded to an odd number of samples, and the plot title shows the
   width actually used. Smoothing lowers peaks, so quote peak gain from the unsmoothed data.
@@ -130,8 +135,9 @@ folder that holds the CSVs, for example `data/01_pattern`.
 ### `plot_s11.py --help`
 
 ```text
-usage: plot_s11.py [-h] [--plots {db,smith} [{db,smith} ...]] [--threshold THRESHOLD]
-                   [--mark MHZ [MHZ ...]] [--no-marks] [--save-dir SAVE_DIR]
+usage: plot_s11.py [-h] [--plots {db,smith} [{db,smith} ...]] [--threshold THRESHOLD] [--ymax DB]
+                   [--ymin DB] [--band LOW HIGH] [--no-band] [--mark MHZ [MHZ ...]] [--no-marks]
+                   [--save-dir SAVE_DIR]
                    files [files ...]
 
 Plot S11 from one or more .s1p files: a dB-vs-frequency plot and a Smith chart.
@@ -139,10 +145,13 @@ Plot S11 from one or more .s1p files: a dB-vs-frequency plot and a Smith chart.
     python scripts/plot_s11.py data/01.S1P
     python scripts/plot_s11.py data/a.s1p data/b.s1p --mark 2400 2450 2480
     python scripts/plot_s11.py data/01.S1P --plots smith --save-dir output
+    python scripts/plot_s11.py data/01.S1P --plots db --ymin -30 --ymax 0
 
 By default the plots are marked at the 2.4 GHz Wi-Fi band edges and center
 (2400, 2442 and 2483 MHz). Use --mark to choose other frequencies (MHz), or
---no-marks to turn the markers off.
+--no-marks to turn the markers off. The dB plot shades the 2.4 GHz Wi-Fi band
+(CH 1-13, 2400-2483.5 MHz); use --band LOW HIGH to shade another range or
+--no-band to turn the shading off.
 
 positional arguments:
   files                 .s1p file(s); several files are overlaid
@@ -152,7 +161,11 @@ options:
   --plots {db,smith} [{db,smith} ...]
                         which plots to make (default: both)
   --threshold THRESHOLD
-                        dB level for the reference line / shaded bands / Smith circle (default -10)
+                        dB level for the dashed reference line and the Smith circle (default -10)
+  --ymax DB             top of the S11 axis in dB (dB plot only; default: automatic)
+  --ymin DB             bottom of the S11 axis in dB (dB plot only; default: automatic)
+  --band LOW HIGH       frequency range (MHz) to shade on the dB plot (default: 2400 2483.5, the 2.4 GHz Wi-Fi band, CH 1-13)
+  --no-band             shade no frequency band
   --mark MHZ [MHZ ...]  frequencies (MHz) to mark on every plot (default: 2400, 2442, 2483)
   --no-marks            draw no frequency markers
   --save-dir SAVE_DIR   save PNGs here instead of showing

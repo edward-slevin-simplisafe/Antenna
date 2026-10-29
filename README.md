@@ -406,16 +406,19 @@ The tests build small synthetic `.s1p` and pattern files, so they do not depend 
 
 - **Efficiency vs. the vendor report:** `efficiency_from_gain_pct` for the sample data is 47 to 54%
   across 2400-2500 MHz, while the vendor report (Peak Gain & Efficiency table) lists 56 to 64%. The
-  ratio is 0.83 to 0.87 at all 11 frequencies, a roughly constant 0.6 to 0.8 dB, and the two follow
-  the same shape across the band. Mismatch loss (about 0.04 dB at 2450 MHz and 0.2 dB at 2400 MHz
-  from the report's return loss) and the 0.13 dB cable loss are too small to explain it. The cause
-  has not been identified; it may be how the vendor defines or measures efficiency, so ask them.
-  The peak gain, by contrast, matches the report exactly at every frequency. `--vendor` puts the two
-  side by side.
+  peak gain matches the report exactly at every frequency, so the gain files and the report appear
+  to share one scale. At every frequency the report's efficiency equals ours plus a whole number of
+  percentage points, to within about 0.01: 10, 10, 10, 10, 11, 10, 8, 9, 9, 9, 9 for 2400 to 2500
+  MHz. A physical loss, or a difference between relative and absolute gain, would instead scale the
+  efficiency by a factor, giving a smooth gap in dB and not whole-number point offsets. Mismatch loss
+  (0.04 to 0.27 dB from the S1P) and the 0.13 dB cable loss together account for at most 0.4 dB of
+  the 0.6 to 0.8 dB gap. The cause has not been identified. Ask the vendor how the efficiency was
+  derived, whether any offset or compensation is applied, and for the chamber software's raw
+  efficiency output. `--vendor` puts the two side by side.
 - **Vendor pass/fail criteria:** the report states criteria (peak gain at most 3.5 dBi, efficiency at
   least 55%, return loss below -10 dB over 2400-2500 MHz). They are not applied as pass/fail here.
-  Applying the efficiency criterion to `efficiency_from_gain_pct` would mark most of the band as a
-  fail where the vendor's own figures pass, until the discrepancy above is understood.
+  Applying the efficiency criterion to `efficiency_from_gain_pct` would mark every frequency as a
+  fail where the vendor's own figures all pass, until the discrepancy above is understood.
 - **`L` and `S` tables:** it is not yet confirmed what these represent (possibly circular
   polarizations), so they are excluded from plots by default. Add them with `--pols T H V L S`.
 - **H/V labeling vs. the vendor report:** the `GainH` and `GainV` tables are plotted exactly as

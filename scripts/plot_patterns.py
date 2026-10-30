@@ -4,17 +4,22 @@ Theta is measured from +Z and phi from +X toward +Y, so the principal planes are
     XY = theta 90 cut,   XZ = phi 0 cut,   YZ = phi 90 cut.
 
     # the three principal planes, polar + rectangular, for every CSV in a folder
-    python scripts/plot_patterns.py data/01_pattern --plane XY XZ YZ
+    python scripts/plot_patterns.py data/v1p9/v1p9-A_pattern --plane XY XZ YZ
 
     # one plane, one frequency, polar only, saved to disk
-    python scripts/plot_patterns.py "data/01_pattern/01-2450*.csv" --plane XY --kind polar --save-dir output
+    python scripts/plot_patterns.py "data/v1p9/v1p9-A_pattern/v1p9_A-2450*.csv" --plane XY --kind polar --save-dir output
 
     # arbitrary cuts: phi = 45 and phi = 135 (sweeping theta)
-    python scripts/plot_patterns.py data/01_pattern --cut phi --angles 45 135
+    python scripts/plot_patterns.py data/v1p9/v1p9-A_pattern --cut phi --angles 45 135
 
 Files may be given as paths, directories (all *.csv directly inside) or glob patterns. The
-frequency is read from the filename (e.g. 01-2400.000000MHz.csv). --plane and --cut/--angles
+frequency is read from the filename (e.g. v1p9_A-2400.000000MHz.csv). --plane and --cut/--angles
 can be combined.
+
+The two half-planes of each cut are tinted (--shade) so the angles read as directions: front (-Y)
+and rear (+Y) in the XY plane, right (+X) and left (-X) in the XZ plane, top (+Z) and bottom (-Z) in
+the YZ plane. Use one split for every plane with --shade front-rear (or right-left / top-bottom), or
+turn it off with --shade none.
 """
 
 import argparse
@@ -23,7 +28,7 @@ import time
 from pathlib import Path
 
 from antenna.feedback import elapsed, say, tip_if_slow
-from antenna.models import GAIN_LIMIT_DB, PLANES, plane_name
+from antenna.models import GAIN_LIMIT_DB, PLANES, SHADE_SPLITS, plane_name
 from antenna.readers.pattern import find_pattern_files, freq_from_filename, load_patterns
 
 MANY_WINDOWS = 12  # warn before opening more interactive windows than this
@@ -54,6 +59,11 @@ def main():
     ap.add_argument("--gain-limit", type=float, default=GAIN_LIMIT_DB, metavar="DB",
                     help=f"dashed max-gain requirement line on rectangular plots (default {GAIN_LIMIT_DB:g})")
     ap.add_argument("--no-gain-limit", action="store_true", help="omit the gain limit line")
+    ap.add_argument("--shade", choices=["auto", "none", *SHADE_SPLITS], default="auto",
+                    help="tint the two half-planes of each cut so the angles read as directions: auto =\n"
+                         "front/rear in the XY plane, right/left in XZ and top/bottom in YZ; or name a split\n"
+                         f"({', '.join(SHADE_SPLITS)}); or none. A split whose axis is not in a plane\n"
+                         "falls back to auto for that plane (default auto)")
     ap.add_argument("--save-dir", type=Path, help="save PNGs here instead of showing")
     args = ap.parse_args()
     gain_limit = None if args.no_gain_limit else args.gain_limit
@@ -78,7 +88,7 @@ def main():
     t0 = time.perf_counter()
     import matplotlib.pyplot as plt
 
-    from antenna.plotting import make_cut_figure
+    from antenna.plotting import make_cut_figure, resolve_shade
 
     load_s = time.perf_counter() - t0
     say(f"Libraries loaded in {load_s:.1f} s")
@@ -95,6 +105,12 @@ def main():
     say(f"Loaded {len(patterns)} frequency point(s): "
         f"{patterns[0].freq_hz / 1e6:g} to {patterns[-1].freq_hz / 1e6:g} MHz")
 
+    shades = {}  # (cut, angle) -> the half-plane split to shade, or None
+    for cut, angle in cuts:
+        shades[(cut, angle)], note = resolve_shade(cut, angle, args.shade)
+        if note:
+            say(f"Note: {note}")
+
     total = len(patterns) * len(cuts) * len(args.kind)
     say(f"Making {total} figure(s)" + (f", saving to {args.save_dir}" if args.save_dir else ""))
     if not args.save_dir and total > MANY_WINDOWS:
@@ -109,7 +125,8 @@ def main():
                 say(f"({count}/{total}) {pattern.freq_hz / 1e6:g} MHz {where} {kind}")
                 try:
                     fig = make_cut_figure(pattern, cut, angle, kind, args.pols, args.dyn_range,
-                                          args.smooth, gain_limit, args.rmin, args.rmax)
+                                          args.smooth, gain_limit, args.rmin, args.rmax,
+                                          shades[(cut, angle)])
                 except (KeyError, ValueError) as err:
                     sys.exit(f"error: {err}")
                 if args.save_dir:

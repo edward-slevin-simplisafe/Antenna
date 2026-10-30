@@ -1,9 +1,9 @@
 """Plot S11 from one or more .s1p files: a dB-vs-frequency plot and a Smith chart.
 
-    python scripts/plot_s11.py data/01.S1P
+    python scripts/plot_s11.py data/v1p9/v1p9-A.S1P
     python scripts/plot_s11.py data/a.s1p data/b.s1p --mark 2400 2450 2480
-    python scripts/plot_s11.py data/01.S1P --plots smith --save-dir output
-    python scripts/plot_s11.py data/01.S1P --plots db --ymin -30 --ymax 0
+    python scripts/plot_s11.py data/v1p9/v1p9-A.S1P --plots smith --save-dir output
+    python scripts/plot_s11.py data/v1p9/v1p9-A.S1P --plots db --ymin -30 --ymax 0
 
 By default the plots are marked at the 2.4 GHz Wi-Fi band edges and center
 (2400, 2442 and 2483 MHz). Use --mark to choose other frequencies (MHz), or

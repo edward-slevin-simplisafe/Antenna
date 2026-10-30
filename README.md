@@ -5,6 +5,10 @@ Python tools for plotting and analyzing antenna measurements:
 - **Return loss / S11** from Touchstone `.s1p` files: dB-vs-frequency plot and Smith chart.
 - **Radiation patterns** from per-frequency gain CSVs: polar and rectangular cuts, with the
   polarizations overlaid and an optional smoothing filter.
+- **Comparing datasets:** overlay the same patterns from two or more hardware versions or samples,
+  one panel per polarization, with difference panels on the rectangular plots.
+- **Gain table:** peak gain and direction, gain toward and averaged over each side of the device,
+  and efficiency, as a CSV.
 
 ## Setup
 
@@ -52,6 +56,7 @@ Antenna/
 ├── scripts/                  # thin command-line wrappers
 │   ├── plot_s11.py
 │   ├── plot_patterns.py
+│   ├── compare_patterns.py   # overlay datasets, a panel per polarization
 │   └── tabulate_patterns.py  # gain summary table, no plots
 ├── tests/                    # pytest; uses small synthetic files, not your data
 ├── data/                     # your measurements (not tracked by git)
@@ -63,16 +68,30 @@ Antenna/
 |---|---|---|
 | **readers** | Turn files into plain data objects. | No plotting. `read_s1p` accepts only `.s1p` files. Pattern frequency is read from the filename. |
 | **models** | `S11Data`, `Pattern`, and constants. | Constants include trace colors and labels, the gain limit, the principal planes, and the Wi-Fi marker frequencies. |
-| **analysis** | S11 in dB, VSWR, bandwidth below a threshold, pattern cuts, peak gain, smoothing. | Pure functions of numpy arrays, so they are easy to test and reuse. |
+| **analysis** | S11 in dB, VSWR, bandwidth below a threshold, pattern cuts, peak gain, smoothing, pairing patterns across datasets by frequency. | Pure functions of numpy arrays, so they are easy to test and reuse. |
 | **plotting** | `plot_*` functions draw on an `Axes` you pass in; `make_*_figure` functions build a complete figure. | Because the plot functions take an `Axes`, they can be embedded in a GUI canvas unchanged. |
 | **scripts** | Parse arguments, load, call plotting, save or show, and print progress. | Keep these thin. |
 
 ## Data formats
 
+**Folder layout.** Nothing requires one, but this works well: a folder per hardware version, with a
+subfolder of pattern CSVs per sample and the `.s1p` files beside them.
+
+```
+data/
+├── v1p9/
+│   ├── v1p9-A.S1P            # S11 of sample A
+│   ├── v1p9-A_pattern/       # one CSV per frequency for sample A
+│   ├── v1p9-B_pattern/  ...
+│   └── vendor_report_v1.9.csv
+└── v2p1/
+    └── v2p1_Pattern/
+```
+
 **S11:** a standard Touchstone one-port file (`.s1p`, any frequency unit or RI/MA/DB format).
 
 **Radiation patterns:** one CSV per frequency, with the frequency in the filename
-(for example `01-2400.000000MHz.csv`). Each file holds one table per polarization:
+(for example `v1p9_A-2400.000000MHz.csv`). Each file holds one table per polarization:
 
 ```
 GainT,,Gain:,3.07,...          <- table name (Gain<key>) and its peak gain
@@ -96,7 +115,7 @@ freq_MHz,peak_gain_dBi,efficiency_pct
 2410,3.11,58.23
 ```
 
-The sample file `data/vendor_report_v1.9.csv` lives with your other data and is not tracked by git.
+The sample file `data/v1p9/vendor_report_v1.9.csv` lives with your other data and is not tracked by git.
 
 ## Conventions
 
@@ -138,6 +157,25 @@ The sample file `data/vendor_report_v1.9.csv` lives with your other data and is 
     poles (Top, Bottom) varies with phi (up to about 3 dB in the sample data), so those two are
     the power average over all phi, and the script prints a note saying how large the variation
     is.
+- **Half-plane shading:** pattern plots tint the two half-planes of each cut, in both the polar and
+  rectangular forms, so the angle axis can be read as directions. By default the XY plane shows
+  front (-Y, gold) and rear (+Y, violet), the XZ plane shows right (+X, teal) and left (-X, coral),
+  and the YZ plane shows top (+Z, sky) and bottom (-Z, tan). `--shade` uses one split for every plane
+  (`front-rear`, `right-left` or `top-bottom`) or `none`; a split whose axis is not in a plane (the
+  XZ plane has no Y axis, for instance) falls back to that plane's default,
+  with a note. Each side keeps its color in every plot, the sides come from `ORIENTATION` in
+  `antenna/models.py`, and the tint sits under the traces on every panel, including the difference
+  panels of comparisons. For a cut that is not a principal plane the first of Y, X, Z that the cut
+  crosses is used.
+- **Dataset comparison** (`compare_patterns.py`): each input is one dataset, and the first is the
+  reference. Files are paired by frequency (within 0.5 MHz); frequencies missing from any dataset
+  are listed and skipped. Each figure has a panel for H+V, H and V that share one gain axis.
+  Datasets are colored (a colorblind-safe palette, up to six), and the polarization is named on
+  the panel. Rectangular figures add a row of difference panels: every later dataset minus the
+  reference, in dB, on the smoothed traces. Differences beyond `--diff-range` (default 10 dB, mostly
+  at nulls) run off the panel edge and the panel counts them. The datasets must share one coordinate
+  frame, which the script cannot check. Smoothing and axis limits apply to every dataset, and
+  comparison panels use 60 degree angle ticks (the single-dataset plots use 30).
 - **Pattern text and ticks:** axis labels, tick labels, legends and titles are larger than the
   matplotlib default, and polar plots have a grid line and label every 10 degrees.
 - **Smoothing** (`--smooth`) is a sliding window across angle, averaged in linear power and wrapped
@@ -208,28 +246,35 @@ Run the scripts from the repository root with the virtual environment active. Wi
 
 ```powershell
 # S11: dB plot and Smith chart with the default Wi-Fi markers
-python scripts/plot_s11.py data/01.S1P
+python scripts/plot_s11.py data/v1p9/v1p9-A.S1P
 
 # Radiation patterns: the three principal planes for every CSV in a sample's folder
-python scripts/plot_patterns.py data/01_pattern --plane XY XZ YZ --save-dir output
+python scripts/plot_patterns.py data/v1p9/v1p9-A_pattern --plane XY XZ YZ --save-dir output
 
 # Same, smoothed with a 20 degree window
-python scripts/plot_patterns.py data/01_pattern --plane XY XZ YZ --smooth 20 --save-dir output
+python scripts/plot_patterns.py data/v1p9/v1p9-A_pattern --plane XY XZ YZ --smooth 20 --save-dir output
+
+# Compare two versions at three frequencies: a panel per polarization, difference panels on rect plots
+python scripts/compare_patterns.py data/v1p9/v1p9-A_pattern data/v2p1/v2p1_Pattern --plane XY XZ YZ --freqs 2400 2450 2500 --save-dir output
+
+# Same, with the three v1.9 samples shown beside the new version (the first is the reference)
+python scripts/compare_patterns.py data/v1p9/v1p9-A_pattern data/v1p9/v1p9-B_pattern data/v1p9/v1p9-C_pattern data/v2p1/v2p1_Pattern --plane XY --freqs 2450 --save-dir output
 
 # Gain table (no plots): peak, gain toward and averaged over each side, side-to-side differences, efficiency
-python scripts/tabulate_patterns.py data/01_pattern
+python scripts/tabulate_patterns.py data/v1p9/v1p9-A_pattern
 
 # Same, with our peak gain and efficiency shown beside the vendor report's
-python scripts/tabulate_patterns.py data/01_pattern --vendor data/vendor_report_v1.9.csv
+python scripts/tabulate_patterns.py data/v1p9/v1p9-A_pattern --vendor data/v1p9/vendor_report_v1.9.csv
 ```
 
-Saved filenames look like `01_db.png`, `01_smith.png` and `2450MHz_XY_polar.png`
-(`..._smooth<N>` is appended when smoothing is on).
+Saved filenames look like `v1p9-A_db.png`, `v1p9-A_smith.png` and `2450MHz_XY_polar.png`
+(`..._smooth<N>` is appended when smoothing is on). Comparison figures include the dataset names, for
+example `2450MHz_XY_rect_v1p9-A_vs_v2p1.png`, so different comparisons do not overwrite each other.
 
 The scripts print timestamped progress (loading libraries, reading each file, building each
 figure) and stop with a one-line `error:` message for problems such as a mistyped path or a
 folder with no CSVs directly inside it. Pattern folders are not searched recursively: point at the
-folder that holds the CSVs, for example `data/01_pattern`.
+folder that holds the CSVs, for example `data/v1p9/v1p9-A_pattern`.
 
 ### `plot_s11.py --help`
 
@@ -241,10 +286,10 @@ usage: plot_s11.py [-h] [--plots {db,smith} [{db,smith} ...]] [--threshold THRES
 
 Plot S11 from one or more .s1p files: a dB-vs-frequency plot and a Smith chart.
 
-    python scripts/plot_s11.py data/01.S1P
+    python scripts/plot_s11.py data/v1p9/v1p9-A.S1P
     python scripts/plot_s11.py data/a.s1p data/b.s1p --mark 2400 2450 2480
-    python scripts/plot_s11.py data/01.S1P --plots smith --save-dir output
-    python scripts/plot_s11.py data/01.S1P --plots db --ymin -30 --ymax 0
+    python scripts/plot_s11.py data/v1p9/v1p9-A.S1P --plots smith --save-dir output
+    python scripts/plot_s11.py data/v1p9/v1p9-A.S1P --plots db --ymin -30 --ymax 0
 
 By default the plots are marked at the 2.4 GHz Wi-Fi band edges and center
 (2400, 2442 and 2483 MHz). Use --mark to choose other frequencies (MHz), or
@@ -276,7 +321,9 @@ options:
 usage: plot_patterns.py [-h] [--plane {XY,XZ,YZ} [{XY,XZ,YZ} ...]] [--cut {phi,theta}]
                         [--angles ANGLES [ANGLES ...]] [--kind {polar,rect} [{polar,rect} ...]]
                         [--pols POLS [POLS ...]] [--smooth [DEG]] [--range DYN_RANGE] [--rmax DB]
-                        [--rmin DB] [--gain-limit DB] [--no-gain-limit] [--save-dir SAVE_DIR]
+                        [--rmin DB] [--gain-limit DB] [--no-gain-limit]
+                        [--shade {auto,none,front-rear,right-left,top-bottom}]
+                        [--save-dir SAVE_DIR]
                         inputs [inputs ...]
 
 Plot radiation-pattern cuts, one figure per frequency, polarizations overlaid.
@@ -285,17 +332,22 @@ Theta is measured from +Z and phi from +X toward +Y, so the principal planes are
     XY = theta 90 cut,   XZ = phi 0 cut,   YZ = phi 90 cut.
 
     # the three principal planes, polar + rectangular, for every CSV in a folder
-    python scripts/plot_patterns.py data/01_pattern --plane XY XZ YZ
+    python scripts/plot_patterns.py data/v1p9/v1p9-A_pattern --plane XY XZ YZ
 
     # one plane, one frequency, polar only, saved to disk
-    python scripts/plot_patterns.py "data/01_pattern/01-2450*.csv" --plane XY --kind polar --save-dir output
+    python scripts/plot_patterns.py "data/v1p9/v1p9-A_pattern/v1p9_A-2450*.csv" --plane XY --kind polar --save-dir output
 
     # arbitrary cuts: phi = 45 and phi = 135 (sweeping theta)
-    python scripts/plot_patterns.py data/01_pattern --cut phi --angles 45 135
+    python scripts/plot_patterns.py data/v1p9/v1p9-A_pattern --cut phi --angles 45 135
 
 Files may be given as paths, directories (all *.csv directly inside) or glob patterns. The
-frequency is read from the filename (e.g. 01-2400.000000MHz.csv). --plane and --cut/--angles
+frequency is read from the filename (e.g. v1p9_A-2400.000000MHz.csv). --plane and --cut/--angles
 can be combined.
+
+The two half-planes of each cut are tinted (--shade) so the angles read as directions: front (-Y)
+and rear (+Y) in the XY plane, right (+X) and left (-X) in the XZ plane, top (+Z) and bottom (-Z) in
+the YZ plane. Use one split for every plane with --shade front-rear (or right-left / top-bottom), or
+turn it off with --shade none.
 
 positional arguments:
   inputs                pattern CSV files, directories or globs
@@ -319,6 +371,79 @@ options:
   --rmin DB             bottom of the gain axis in dB (default: --range below the top)
   --gain-limit DB       dashed max-gain requirement line on rectangular plots (default 4)
   --no-gain-limit       omit the gain limit line
+  --shade {auto,none,front-rear,right-left,top-bottom}
+                        tint the two half-planes of each cut so the angles read as directions: auto =
+                        front/rear in the XY plane, right/left in XZ and top/bottom in YZ; or name a split
+                        (front-rear, right-left, top-bottom); or none. A split whose axis is not in a plane
+                        falls back to auto for that plane (default auto)
+  --save-dir SAVE_DIR   save PNGs here instead of showing
+```
+
+### `compare_patterns.py --help`
+
+```text
+usage: compare_patterns.py [-h] [--labels NAME [NAME ...]] [--freqs MHZ [MHZ ...]]
+                           [--plane {XY,XZ,YZ} [{XY,XZ,YZ} ...]] [--cut {phi,theta}]
+                           [--angles ANGLES [ANGLES ...]] [--kind {polar,rect} [{polar,rect} ...]]
+                           [--pols KEY [KEY ...]] [--smooth [DEG]] [--range DYN_RANGE] [--rmax DB]
+                           [--rmin DB] [--gain-limit DB] [--no-gain-limit] [--diff-range DB]
+                           [--shade {auto,none,front-rear,right-left,top-bottom}]
+                           [--save-dir SAVE_DIR]
+                           inputs [inputs ...]
+
+Overlay radiation patterns from two or more datasets, one panel per polarization.
+
+Each input is one dataset: a folder of pattern CSVs, a single file, or a glob. Files are paired by
+frequency, and each frequency, plane and plot type gives one figure with a panel for H+V, H and V
+sharing one gain axis. Rectangular figures also get a row of difference panels: the gain of every
+later dataset minus the first one (the reference), in dB. Datasets are colored, and the
+polarization is named on each panel.
+
+    # two hardware versions, all three principal planes, at three frequencies
+    python scripts/compare_patterns.py data/v1p9/v1p9-A_pattern data/v2p1/v2p1_Pattern --plane XY XZ YZ --freqs 2400 2450 2500 --save-dir output
+
+    # three samples of one version plus the new version, 2450 MHz, polar only
+    python scripts/compare_patterns.py data/v1p9/v1p9-A_pattern data/v1p9/v1p9-B_pattern data/v1p9/v1p9-C_pattern data/v2p1/v2p1_Pattern --plane XY --freqs 2450 --kind polar
+
+    # two single files, with your own legend names
+    python scripts/compare_patterns.py "data/v1p9/v1p9-A_pattern/*2450*.csv" "data/v2p1/v2p1_Pattern/*2450*.csv" --plane XZ --labels "v1.9 A" "v2.1"
+
+Datasets are drawn in the order given. The legend names default to the folder names (without a
+trailing "_pattern"); --labels sets them. Only frequencies present in every dataset are compared
+(within 0.5 MHz), and the others are listed and skipped. Theta is measured from +Z and phi from +X
+toward +Y, as in plot_patterns.py, and the datasets are assumed to share one coordinate frame.
+Smoothing, axis limits, the gain limit line and the half-plane shading (--shade) work as in
+plot_patterns.py and apply to every dataset and panel. Up to six datasets can be compared at once.
+
+positional arguments:
+  inputs                one dataset per input (folder, file or glob); at least two. The first is the reference for the difference panels
+
+options:
+  -h, --help            show this help message and exit
+  --labels NAME [NAME ...]
+                        legend names, one per dataset (default: the folder names)
+  --freqs MHZ [MHZ ...]
+                        compare only these frequencies (default: every frequency in common)
+  --plane {XY,XZ,YZ} [{XY,XZ,YZ} ...]
+                        principal plane(s) to plot: XY, XZ, YZ
+  --cut {phi,theta}     phi: fixed phi, sweep theta.  theta: fixed theta, sweep phi
+  --angles ANGLES [ANGLES ...]
+                        fixed angle(s) in degrees for --cut, one set of figures per value
+  --kind {polar,rect} [{polar,rect} ...]
+  --pols KEY [KEY ...]  table keys to show, one panel each (default: T H V, i.e. H+V, H and V)
+  --smooth [DEG]        sliding-window smoothing across angle (omit = off, bare --smooth = 10 deg),
+                        applied to every dataset; see plot_patterns.py --help
+  --range DYN_RANGE     gain axis span in dB below the top (default 40)
+  --rmax DB             top of the gain axis in dB (default: highest gain, rounded up to a multiple of 5)
+  --rmin DB             bottom of the gain axis in dB (default: --range below the top)
+  --gain-limit DB       dashed max-gain requirement line on rectangular plots (default 4)
+  --no-gain-limit       omit the gain limit line
+  --diff-range DB       the difference panels span +/- this many dB (default 10); larger differences run off the panel edge and are counted
+  --shade {auto,none,front-rear,right-left,top-bottom}
+                        tint the two half-planes of each cut on every panel so the angles read as
+                        directions: auto = front/rear in the XY plane, right/left in XZ, top/bottom in YZ;
+                        or name a split (front-rear, right-left, top-bottom); or none. A split whose axis is
+                        not in a plane falls back to auto for that plane (default auto)
   --save-dir SAVE_DIR   save PNGs here instead of showing
 ```
 
@@ -332,10 +457,10 @@ Tabulate radiation-pattern gains into a CSV file (no plots), one row per frequen
 For each pattern file it records the peak total (H+V) gain with the theta and phi where it
 occurs and which side of the device that is, and the total gain toward each side of the device.
 
-    python scripts/tabulate_patterns.py data/01_pattern
-    python scripts/tabulate_patterns.py data/01_pattern --output output/sample1.csv
-    python scripts/tabulate_patterns.py "data/01_pattern/01-24[45]*.csv"
-    python scripts/tabulate_patterns.py data/01_pattern --vendor data/vendor_report_v1.9.csv
+    python scripts/tabulate_patterns.py data/v1p9/v1p9-A_pattern
+    python scripts/tabulate_patterns.py data/v1p9/v1p9-A_pattern --output output/v1p9-A.csv
+    python scripts/tabulate_patterns.py "data/v1p9/v1p9-A_pattern/v1p9_A-24[45]*.csv"
+    python scripts/tabulate_patterns.py data/v1p9/v1p9-A_pattern --vendor data/v1p9/vendor_report_v1.9.csv
 
 Sides of the device (set in ORIENTATION in antenna/models.py; Right and Left are as seen from
 the front):
@@ -372,7 +497,7 @@ peak_gain_dBi and efficiency_pct, one row per frequency. Lines starting with # a
 a blank cell means the vendor gave no number. The columns are added to the output CSV as well.
 
 Files may be given as paths, directories (all *.csv directly inside) or glob patterns. The
-frequency is read from the filename (e.g. 01-2400.000000MHz.csv).
+frequency is read from the filename (e.g. v1p9_A-2400.000000MHz.csv).
 
 positional arguments:
   inputs               pattern CSV files, directories or globs

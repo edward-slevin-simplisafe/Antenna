@@ -30,6 +30,9 @@ POL_COLORS = {
 # Requirement: gain must not exceed this (dB); drawn as a dashed line on rectangular plots.
 GAIN_LIMIT_DB = 4.0
 
+# The difference panels of dataset comparisons span +/- this many dB.
+DIFF_RANGE_DB = 10.0
+
 # 2.4 GHz Wi-Fi markers for S11 plots: lower band edge, band center, upper band edge (MHz),
 # rounded to whole MHz. The allocation is 2400-2483.5 MHz (center 2441.75 MHz; channel 7 is 2442).
 WIFI_24_MARKS_MHZ = (2400.0, 2442.0, 2483.0)
@@ -76,6 +79,28 @@ ORIENTATION = {
 
 # Pairs of opposite sides compared in the gain table; each difference is (first - second) in dB.
 OPPOSITE_SIDES = (("Front", "Rear"), ("Right", "Left"), ("Top", "Bottom"))
+
+
+def axis_text(axis: str) -> str:
+    """'Y-' -> '-Y' (the usual way to write an axis direction)."""
+    return f"{axis[1]}{axis[0]}"
+
+
+# Shading of the half-planes of a cut, so the angle axis can be read as directions. A split is a
+# pair of opposite sides, named like "front-rear"; each side keeps one color in every plot.
+SHADE_SPLITS = {f"{a}-{b}".lower(): (a, b) for a, b in OPPOSITE_SIDES}
+SIDE_COLORS = {
+    "Front": "#F2C94C",  # gold
+    "Rear": "#8E7CC3",  # violet
+    "Right": "#4DB6AC",  # teal
+    "Left": "#F08A6C",  # coral
+    "Top": "#6BB7E8",  # sky
+    "Bottom": "#B58B63",  # tan
+}
+SHADE_ALPHA = 0.18
+# The axis "auto" splits on in each principal plane: front/rear in XY, left/right in XZ and
+# top/bottom in YZ.
+AUTO_SHADE_AXIS = {"XY": "Y", "XZ": "X", "YZ": "Z"}
 
 # A direction within this many degrees of an axis is named by that axis alone (see
 # analysis.direction_label): near a pole just Top/Bottom, near the horizon no Top/Bottom word.

@@ -249,3 +249,80 @@ def direction_label(theta_deg: float, phi_deg: float, orientation: dict[str, str
         pair = [axes[quadrant], axes[(quadrant + 1) % 4]]
         parts += [side[ax] for ax in sorted(pair, key=lambda ax: ax[0] != "Y")]
     return "-".join(parts)
+
+
+def match_by_frequency(pattern_sets: list[list[Pattern]], labels: list[str],
+                       tol_mhz: float = 0.5):
+    """Group the patterns of several datasets that were measured at the same frequency.
+
+    pattern_sets holds one list of patterns per dataset and labels names each dataset. A pattern
+    matches one in another set if their frequencies are within tol_mhz. Returns (groups, skipped):
+    groups is a list of (freq_MHz, [one pattern per dataset, in dataset order]) sorted by frequency
+    (the frequency of the first dataset's pattern), and skipped maps each label to the frequencies
+    (MHz) of its patterns that are not present in every dataset. Raises ValueError if a dataset has
+    two patterns within tol_mhz of each other, since they could not be paired reliably.
+    """
+    if len(pattern_sets) != len(labels):
+        raise ValueError("one label per dataset is needed")
+    mhz = [[p.freq_hz / 1e6 for p in patterns] for patterns in pattern_sets]
+    for label, freqs in zip(labels, mhz):
+        ordered = sorted(freqs)
+        for a, b in zip(ordered, ordered[1:]):
+            if b - a <= tol_mhz:
+                raise ValueError(f"{label}: two files at {a:g} and {b:g} MHz cannot be told apart")
+
+    groups, used = [], [set() for _ in pattern_sets]
+    for i, ref in enumerate(pattern_sets[0]):
+        members, indices = [ref], [i]
+        for k in range(1, len(pattern_sets)):
+            near = [j for j, f in enumerate(mhz[k]) if abs(f - mhz[0][i]) <= tol_mhz]
+            if not near:
+                break
+            j = min(near, key=lambda j: abs(mhz[k][j] - mhz[0][i]))
+            members.append(pattern_sets[k][j])
+            indices.append(j)
+        else:
+            groups.append((mhz[0][i], members))
+            for k, j in enumerate(indices):
+                used[k].add(j)
+    groups.sort(key=lambda g: g[0])
+    skipped = {label: sorted(f for j, f in enumerate(freqs) if j not in used[k])
+               for k, (label, freqs) in enumerate(zip(labels, mhz))}
+    return groups, skipped
+
+
+def shade_spans(cut: str, value_deg: float, axis: str, step_deg: float = 0.25):
+    """Where along a cut the direction lies on the + or - side of an axis ('X', 'Y' or 'Z').
+
+    Returns a list of (start_deg, end_deg, sign) that tiles the cut's angle range (-180 to 180 for
+    a phi cut, 0 to 360 for a theta cut), with sign +1 where the direction has a positive component
+    along the axis and -1 where it is negative. Boundaries are found on a step_deg grid, so they are
+    accurate to about half a step. Returns None if the cut never leaves the plane perpendicular to
+    the axis (for example the Y axis for the XZ plane), where there is nothing to split.
+    """
+    if cut not in ("phi", "theta"):
+        raise ValueError("cut must be 'phi' or 'theta'")
+    if axis not in ("X", "Y", "Z"):
+        raise ValueError(f"axis must be X, Y or Z, not {axis!r}")
+    lo, hi = (-180.0, 180.0) if cut == "phi" else (0.0, 360.0)
+    psi = np.linspace(lo, hi, int(round((hi - lo) / step_deg)) + 1)
+    if cut == "phi":  # theta runs out and back: negative angles are the phi + 180 side
+        theta = np.deg2rad(np.abs(psi))
+        phi = np.deg2rad(value_deg) + np.where(psi >= 0, 0.0, np.pi)
+    else:
+        theta = np.full_like(psi, np.deg2rad(value_deg))
+        phi = np.deg2rad(psi)
+    component = {"X": np.sin(theta) * np.cos(phi), "Y": np.sin(theta) * np.sin(phi),
+                 "Z": np.cos(theta)}[axis]
+    if np.max(np.abs(component)) < 1e-9:
+        return None
+
+    sign = np.where(component > 1e-9, 1, np.where(component < -1e-9, -1, 0))
+    known = np.nonzero(sign)[0]  # samples clearly on one side; the rest lie on a boundary
+    edges, signs = [lo], [int(sign[known[0]])]
+    for i, j in zip(known[:-1], known[1:]):
+        if sign[i] != sign[j]:
+            edges.append(float((psi[i] + psi[j]) / 2))  # midway across the gap, so on a zero sample
+            signs.append(int(sign[j]))
+    edges.append(hi)
+    return list(zip(edges[:-1], edges[1:], signs))

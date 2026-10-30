@@ -3,10 +3,10 @@
 For each pattern file it records the peak total (H+V) gain with the theta and phi where it
 occurs and which side of the device that is, and the total gain toward each side of the device.
 
-    python scripts/tabulate_patterns.py data/01_pattern
-    python scripts/tabulate_patterns.py data/01_pattern --output output/sample1.csv
-    python scripts/tabulate_patterns.py "data/01_pattern/01-24[45]*.csv"
-    python scripts/tabulate_patterns.py data/01_pattern --vendor data/vendor_report_v1.9.csv
+    python scripts/tabulate_patterns.py data/v1p9/v1p9-A_pattern
+    python scripts/tabulate_patterns.py data/v1p9/v1p9-A_pattern --output output/v1p9-A.csv
+    python scripts/tabulate_patterns.py "data/v1p9/v1p9-A_pattern/v1p9_A-24[45]*.csv"
+    python scripts/tabulate_patterns.py data/v1p9/v1p9-A_pattern --vendor data/v1p9/vendor_report_v1.9.csv
 
 Sides of the device (set in ORIENTATION in antenna/models.py; Right and Left are as seen from
 the front):
@@ -43,7 +43,7 @@ peak_gain_dBi and efficiency_pct, one row per frequency. Lines starting with # a
 a blank cell means the vendor gave no number. The columns are added to the output CSV as well.
 
 Files may be given as paths, directories (all *.csv directly inside) or glob patterns. The
-frequency is read from the filename (e.g. 01-2400.000000MHz.csv).
+frequency is read from the filename (e.g. v1p9_A-2400.000000MHz.csv).
 """
 
 import argparse
